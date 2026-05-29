@@ -1,0 +1,31 @@
+{
+  "name": "codex-to-siyuan",
+  "author": "Mangteng1994",
+  "url": "https://github.com/Mangteng1994/codex-to-siyuan",
+  "version": "0.9.6",
+  "minAppVersion": "3.2.0",
+  "backends": ["windows", "linux", "darwin"],
+  "frontends": ["desktop", "desktop-window"],
+  "disabledInPublish": true,
+  "displayName": {
+    "default": "Codex Session Sync",
+    "zh_CN": "Codex 会话同步"
+  },
+  "description": {
+    "default": "Automatically save Codex conversations to SiYuan notes via Stop hook. Supports incremental append and date-based organization.",
+    "zh_CN": "通过 Stop Hook 自动将 Codex 对话保存到思源笔记，支持增量追加和按日期组织。"
+  },
+  "readme": {
+    "default": "README.md",
+    "zh_CN": "README_zh_CN.md"
+  },
+  "keywords": [
+    "codex",
+    "hook",
+    "session",
+    "sync",
+    "notes",
+    "对话同步",
+    "会话记录"
+  ]
+}

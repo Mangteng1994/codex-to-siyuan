@@ -1,0 +1,20 @@
+{
+  "name": "codex-to-siyuan",
+  "version": "0.9.6",
+  "description": "SiYuan plugin: automatically save Codex conversations to SiYuan notes",
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "keywords": ["codex", "siyuan", "siyuan-plugin", "hook", "notes", "思源笔记"],
+  "author": "Mangteng1994",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Mangteng1994/codex-to-siyuan.git"
+  },
+  "homepage": "https://github.com/Mangteng1994/codex-to-siyuan",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT"
+}
