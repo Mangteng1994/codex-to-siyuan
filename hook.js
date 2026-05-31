@@ -701,13 +701,14 @@ async function main() {
   debugLogFile(`hook summary start: sessionId=${sessionId}, transcriptPath=${transcriptPath || ''}, previousByteOffset=${previousByteOffset}, newByteOffset=${newByteOffset}, rawParsedMessages=${rawParsedMessages.length}`);
   debugMessageList('raw parsed message', rawParsedMessages);
 
+  let shouldAdvanceByteOffset = false;
+
   if (messages.length === 0) {
-    process.stderr.write(`[codex-to-siyuan] no messages parsed from transcript (isFirstRun=${isFirstRun}), will try fallback or defer
+    process.stderr.write(`[codex-to-siyuan] no messages parsed from transcript (isFirstRun=\), will try fallback or defer
 `);
     const fallbackMessage = buildFallbackAssistantMessage(lastAssistantMessage);
 
     if (!fallbackMessage) {
-      // Nothing new -- update offset and exit
       saveState(sessionId, state);
       return;
     }
@@ -720,7 +721,7 @@ async function main() {
     state.lastFallbackHash = fallbackHash;
     messages = [fallbackMessage];
   } else {
-    state.lastByteOffset = newByteOffset;
+    shouldAdvanceByteOffset = true;
   }
 
   messages = normalizeMessages(messages);
@@ -745,16 +746,22 @@ async function main() {
       }
       state.lastFallbackHash = fallbackHash;
       messages = [fallbackMessage];
+      shouldAdvanceByteOffset = false;
     } else {
       saveState(sessionId, state);
       return;
     }
   }
 
-  // 6. Format messages
+  // 6. Advance byte offset only if we used real transcript messages
+  if (shouldAdvanceByteOffset) {
+    state.lastByteOffset = newByteOffset;
+  }
+
+  // 7. Format messages
   const markdown = formatMessages(messages, template);
 
-  // 7. Create or append to SiYuan doc
+  // 8. Create or append to SiYuan doc
   const api = new SiYuanAPI(siyuanUrl, token);
   const sessionIdShort = (sessionId || '').slice(0, 8);
 
@@ -838,7 +845,7 @@ async function main() {
     }
   }
 
-  // 8. Save session state
+  // 9. Save session state
   saveState(sessionId, state);
 }
 

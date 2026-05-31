@@ -552,6 +552,120 @@ ${content}\
   }
 });
 
+
+test('assistant-only transcript with classic mode does not advance byteOffset on first run', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hook-nooff-'));
+  const sessionId = `e2e-nooff-${Date.now()}-ggg`;
+  const statePath = getStatePath(sessionId);
+  const transcriptPath = path.join(tempDir, 'session.jsonl');
+  const configPath = path.join(tempDir, 'config.json');
+
+  try { fs.rmSync(statePath, { force: true }); } catch {}
+  const fake = await startFakeSiYuan();
+
+  try {
+    fs.writeFileSync(configPath, JSON.stringify({
+      notebook: 'notebook-nooff',
+      siyuanUrl: fake.baseUrl,
+      siyuanToken: 'token-nooff',
+      syncMode: 'classic',
+      parentPath: '/Codex Sessions',
+      pathTemplate: '${parentPath}/${date}/${title}-${sessionIdShort}',
+      template: '## ${role} (${time})\n\n${content}\n\n---\n',
+      headerTemplate: '# ${projectName}\n\n---\n',
+    }), 'utf8');
+
+    writeJsonl(transcriptPath, [
+      { type: 'turn_context', payload: { turn_id: 'turn-nooff-1' } },
+      {
+        timestamp: '2026-05-31T08:00:00.000Z',
+        type: 'response_item',
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'auto reply only' }] },
+      },
+    ]);
+
+    const env = {
+      CODEX_TO_SIYUAN_CONFIG: configPath,
+      CODEX_TO_SIYUAN_DEBUG: '1',
+    };
+
+    const r1 = await runHook({
+      session_id: sessionId,
+      transcript_path: transcriptPath,
+      cwd: 'C:\\demo',
+      last_assistant_message: 'fallback from hook',
+    }, env);
+
+    assert.equal(r1.code, 0);
+    assert.equal(fake.requests.length >= 1, true);
+    assert.equal(fake.requests[0].url, '/api/filetree/createDocWithMd');
+
+    const savedState = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    assert.equal(savedState.lastByteOffset, 0, 'offset must not advance when using fallback');
+  } finally {
+    await new Promise(resolve => fake.server.close(resolve));
+    fs.rmSync(statePath, { force: true });
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('user+assistant transcript advances byteOffset normally', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hook-advoff-'));
+  const sessionId = `e2e-advoff-${Date.now()}-hhh`;
+  const statePath = getStatePath(sessionId);
+  const transcriptPath = path.join(tempDir, 'session.jsonl');
+  const configPath = path.join(tempDir, 'config.json');
+
+  try { fs.rmSync(statePath, { force: true }); } catch {}
+  const fake = await startFakeSiYuan();
+
+  try {
+    fs.writeFileSync(configPath, JSON.stringify({
+      notebook: 'notebook-advoff',
+      siyuanUrl: fake.baseUrl,
+      siyuanToken: 'token-advoff',
+      syncMode: 'classic',
+      parentPath: '/Codex Sessions',
+      pathTemplate: '${parentPath}/${date}/${title}-${sessionIdShort}',
+      template: '## ${role} (${time})\n\n${content}\n\n---\n',
+      headerTemplate: '# ${projectName}\n\n---\n',
+    }), 'utf8');
+
+    writeJsonl(transcriptPath, [
+      { type: 'turn_context', payload: { turn_id: 'turn-advoff-1' } },
+      {
+        timestamp: '2026-05-31T09:00:00.000Z',
+        type: 'response_item',
+        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hello' }] },
+      },
+      {
+        timestamp: '2026-05-31T09:00:01.000Z',
+        type: 'response_item',
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'hi there' }] },
+      },
+    ]);
+
+    const env = {
+      CODEX_TO_SIYUAN_CONFIG: configPath,
+      CODEX_TO_SIYUAN_DEBUG: '1',
+    };
+
+    const r1 = await runHook({
+      session_id: sessionId,
+      transcript_path: transcriptPath,
+      cwd: 'C:\\demo',
+    }, env);
+
+    assert.equal(r1.code, 0);
+    const savedState = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    assert.ok(savedState.lastByteOffset > 0, 'offset must advance when real messages parsed');
+  } finally {
+    await new Promise(resolve => fake.server.close(resolve));
+    fs.rmSync(statePath, { force: true });
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test('assistant-only first turn WITH last_assistant_message creates doc via fallback', async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hook-fbmsg-'));
   const sessionId = `e2e-fbmsg-${Date.now()}-fff`;
