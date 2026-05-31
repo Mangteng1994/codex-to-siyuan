@@ -470,6 +470,8 @@ function segmentMessagesForClassicMode(normalizedMessages) {
  * @returns {Array}
  */
 function buildClassicModeMessages(normalizedMessages) {
+  process.stderr.write('[codex-to-siyuan] CLASSIC IN: ' + normalizedMessages.length + ' msgs, roles=' + JSON.stringify(normalizedMessages.map(m=>m.role)) + '\n');
+  try { fs.appendFileSync(path.join(SCRIPT_DIR, '..', '..', '..', 'temp', 'codex-classic-trace.log'), 'CLASSIC IN: ' + normalizedMessages.length + '\n', 'utf8'); } catch {}
   const result = [];
   const segments = segmentMessagesForClassicMode(normalizedMessages);
 
@@ -834,6 +836,7 @@ async function main() {
   messages = normalizeMessages(messages);
   alwaysLog('after normalize: ' + JSON.stringify(messages.map(m => ({role:m.role,texts:(m.parts||[]).filter(p=>p.type==='text').map(p=>String(p.text||'').slice(0,40))}))));
   messages = filterMessages(messages, config);
+  process.stderr.write('[codex-to-siyuan] after filterMessages: ' + messages.length + ' msgs, roles=' + JSON.stringify(messages.map(m=>m.role)) + '\n');
   alwaysLog('after filterMessages: ' + JSON.stringify(messages.map(m => ({role:m.role,texts:(m.parts||[]).filter(p=>p.type==='text').map(p=>String(p.text||'').slice(0,40))}))));
   debugLog(`hook summary normalized: normalizedMessages=${messages.length}`);
   debugLogFile(`hook summary normalized: normalizedMessages=${messages.length}`);
@@ -841,6 +844,7 @@ async function main() {
   alwaysLog('normalized detail: ' + JSON.stringify(messages.map(m => ({role:m.role,turnId:m.turnId,texts:(m.parts||[]).filter(p=>p.type==='text').map(p=>String(p.text||'').slice(0,60))}))));
 
   alwaysLog('before syncMode filter: ' + JSON.stringify(messages.map(m => ({role:m.role,texts:(m.parts||[]).filter(p=>p.type==='text').map(p=>String(p.text||'').slice(0,40))}))));
+  process.stderr.write('[codex-to-siyuan] before syncMode filter: ' + messages.length + ' msgs, syncMode=' + syncMode + '\n');
   messages = filterMessagesBySyncMode(messages, syncMode, lastAssistantMessage);
   debugLog(`hook summary filtered: syncMode=${syncMode}, filteredMessages=${messages.length}`);
   alwaysLog('filtered: ' + messages.length + ' msgs, syncMode=' + syncMode);
