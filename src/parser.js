@@ -517,6 +517,13 @@ function mergeTurnMessages(messages) {
   const merged = [];
   const byRole = {};
 
+  // DEBUG
+  try {
+    const fs = require('fs'); const path = require('path');
+    const lp = path.join(__dirname, '..', '..', '..', '..', 'temp', 'codex-merge-debug.log');
+    fs.appendFileSync(lp, 'MERGE IN: ' + JSON.stringify(messages.map(m => ({role:m.role,partsLen:m.parts?m.parts.length:0}))) + '\n', 'utf8');
+  } catch {}
+
   for (const message of messages) {
     if (byRole[message.role]) {
       byRole[message.role].parts = mergeParts(byRole[message.role].parts, message.parts);
@@ -526,6 +533,13 @@ function mergeTurnMessages(messages) {
       merged.push(copy);
     }
   }
+
+  // DEBUG
+  try {
+    const fs = require('fs'); const path = require('path');
+    const lp = path.join(__dirname, '..', '..', '..', '..', 'temp', 'codex-merge-debug.log');
+    fs.appendFileSync(lp, 'MERGE OUT: ' + JSON.stringify(merged.map(m => ({role:m.role,partsLen:m.parts?m.parts.length:0}))) + '\n', 'utf8');
+  } catch {}
 
   return merged;
 }
