@@ -832,8 +832,10 @@ async function main() {
 
   messages = filterMessagesBySyncMode(messages, syncMode, lastAssistantMessage);
   debugLog(`hook summary filtered: syncMode=${syncMode}, filteredMessages=${messages.length}`);
+  alwaysLog('filtered: ' + messages.length + ' msgs, syncMode=' + syncMode);
   debugLogFile(`hook summary filtered: syncMode=${syncMode}, filteredMessages=${messages.length}`);
   debugMessageList('filtered message', messages);
+  alwaysLog('filtered roles: ' + JSON.stringify(messages.map(m => ({role:m.role,parts:(m.parts||[]).filter(p=>p.type==='text').length}))));
 
   if (messages.length === 0) {
     // Use last_assistant_message as fallback when filtering removed everything
