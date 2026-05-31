@@ -526,7 +526,11 @@ function shouldDeferFirstFallbackWrite({ isFirstRun, syncMode, normalizedMessage
   const mode = ['classic', 'minimal', 'full'].includes(syncMode) ? syncMode : 'classic';
   if (mode === 'minimal') return false;
 
-  return !hasUserTextMessage(normalizedMessages);
+  if (!hasUserTextMessage(normalizedMessages)) {
+    debugLog(`shouldDeferFirstFallbackWrite: no user text yet, syncMode=${syncMode}, isFirstRun=${isFirstRun}`);
+  }
+  // 不再作为硬阻断 — 允许 fallback 继续写入
+  return false;
 }
 
 /**
@@ -707,7 +711,8 @@ async function main() {
       // Nothing new -- update offset and exit
       saveState(sessionId, state);
       return;
-    }ackHash = hashContent(lastAssistantMessage);
+    }
+    const fallbackHash = hashContent(lastAssistantMessage);
     if (fallbackHash && state.lastFallbackHash === fallbackHash) {
       saveState(sessionId, state);
       return;
@@ -725,8 +730,7 @@ async function main() {
   debugLogFile(`hook summary normalized: normalizedMessages=${messages.length}`);
   debugMessageList('normalized message', messages);
 
-    const mode = ['classic', 'minimal', 'full'].includes(syncMode) ? syncMode : 'classic';
-  messages = filterMessagesBySyncMode(messages, syncMode, lastAssistantMessage);messages = filterMessagesBySyncMode(messages, syncMode, lastAssistantMessage);
+  messages = filterMessagesBySyncMode(messages, syncMode, lastAssistantMessage);
   debugLog(`hook summary filtered: syncMode=${syncMode}, filteredMessages=${messages.length}`);
   debugLogFile(`hook summary filtered: syncMode=${syncMode}, filteredMessages=${messages.length}`);
   debugMessageList('filtered message', messages);

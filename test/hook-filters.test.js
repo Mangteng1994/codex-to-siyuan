@@ -85,7 +85,7 @@ test('路径模板渲染保持默认目录结构，并支持自定义项目层�
   }), '/Codex Sessions/demo/2026-05-31/hello');
 });
 
-test('首轮经典模式在没有 user 文本时，应延迟 assistant fallback 落库', () => {
+test('首轮经典模式在没有 user 文本时，不再延迟写入（允许 fallback 创建文档）', () => {
   assert.equal(shouldDeferFirstFallbackWrite({
     isFirstRun: true,
     syncMode: 'classic',
@@ -95,7 +95,7 @@ test('首轮经典模式在没有 user 文本时，应延迟 assistant fallback 
         parts: [{ type: 'text', text: '在。可试之。' }],
       },
     ],
-  }), true);
+  }), false);
 });
 
 test('首轮经典模式有 user 文本时，不应延迟写入', () => {

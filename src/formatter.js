@@ -43,7 +43,7 @@ function formatParts(parts) {
   for (const part of parts) {
     switch (part.type) {
       case 'text':
-        sections.push(part.text);
+        sections.push(balanceMarkdownFences(part.text));
         break;
 
       case 'tool_use':
@@ -78,6 +78,24 @@ function formatToolUse(part) {
 function formatToolResult(part) {
   if (!part.text) return '';
   return `**📋 Tool Result**\n\n\`\`\`\n${part.text}\n\`\`\``;
+}
+
+
+
+/**
+ * 平衡 Markdown 代码围栏。
+ * 如果文本中有奇数个未转义的三反引号围栏，自动在末尾补一个闭合围栏，
+ * 防止后续内容被渲染进代码块内。
+ * @param {string} text
+ * @returns {string}
+ */
+function balanceMarkdownFences(text) {
+  const str = String(text || '');
+  // 统计行首（忽略前导空白）的三反引号围栏
+  const fenceMatches = str.match(/^[ \t]*```/gm);
+  if (!fenceMatches || fenceMatches.length % 2 === 0) return str;
+  // 奇数围栏 -> 补一个闭合围栏
+  return str + '\n```';
 }
 
 /**
@@ -179,5 +197,6 @@ module.exports = {
   sanitizePathSegment,
   renderTemplate,
   formatTime,
+  balanceMarkdownFences,
   formatDate,
 };

@@ -20,7 +20,7 @@ const TOOL_LIKE_TYPES = new Set([
  */
 function cleanMessageText(text) {
   return String(text || '')
-    .replace(/<environment_context>[\s\S]*?<\/environment_context>\s*/g, '')
+    .replace(/<environment_context>[\s\S]*?<\/environment_context>\s*/g, '').replace(/<turn_aborted>[\s\S]*?<\/turn_aborted>\s*/g, '')
     .trim();
 }
 

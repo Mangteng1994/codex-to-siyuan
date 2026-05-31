@@ -16,6 +16,7 @@ const {
   formatToolResult,
   generateDocHeader,
   sanitizePathSegment,
+  balanceMarkdownFences,
 } = require('../src/formatter');
 const { buildFallbackAssistantMessage } = require('../hook');
 
@@ -548,6 +549,73 @@ test('fallback assistant message can be built from last_assistant_message', () =
   assert.equal(message.role, 'assistant');
   assert.equal(message.parts[0].type, 'text');
   assert.equal(message.parts[0].text, 'final answer');
+});
+
+
+test('cleanMessageText removes turn_aborted blocks', () => {
+  const raw = `用户文本
+<turn_aborted>
+The user interrupted...
+</turn_aborted>
+`;
+
+  const cleaned = cleanMessageText(raw);
+  assert.equal(cleaned.includes('turn_aborted'), false);
+  assert.equal(cleaned.includes('The user interrupted'), false);
+  assert.match(cleaned, /用户文本/);
+});
+
+test('cleanMessageText removes turn_aborted before environment_context', () => {
+  const raw = `<turn_aborted>用户中断</turn_aborted>
+
+<environment_context><cwd>C:\\demo</cwd></environment_context>
+
+测试`;
+
+  const cleaned = cleanMessageText(raw);
+  assert.equal(cleaned.includes('turn_aborted'), false);
+  assert.equal(cleaned.includes('用户中断'), false);
+  assert.equal(cleaned.includes('environment_context'), false);
+  assert.equal(cleaned, '测试');
+});
+
+
+
+test('balanceMarkdownFences adds closing fence when odd count', () => {
+  const text = '```javascript\nconst x = 1;\n';
+  const balanced = balanceMarkdownFences(text);
+  assert.match(balanced, /```$/m);
+  const count = (balanced.match(/^[ \t]*```/gm) || []).length;
+  assert.equal(count % 2, 0);
+});
+
+test('balanceMarkdownFences does not modify already-balanced fences', () => {
+  const text = '```javascript\nconst x = 1;\n```\n';
+  const balanced = balanceMarkdownFences(text);
+  assert.equal(balanced, text);
+});
+
+test('balanceMarkdownFences handles text without any fences', () => {
+  const text = 'plain text without fences';
+  assert.equal(balanceMarkdownFences(text), text);
+});
+
+test('formatMessages auto-closes unclosed code fence to protect following headings', () => {
+  const messages = [
+    {
+      role: 'assistant',
+      timestamp: '2026-05-29T06:00:00.000Z',
+      parts: [{ type: 'text', text: '```javascript\nconst x = 1;\n' }],
+    },
+    {
+      role: 'user',
+      timestamp: '2026-05-29T06:01:00.000Z',
+      parts: [{ type: 'text', text: 'next question' }],
+    },
+  ];
+  const markdown = formatMessages(messages, '## ${role} (${time})\n\n${content}\n\n---\n');
+  assert.match(markdown, /```\n\n---\n/);
+  assert.match(markdown, /## 🧑 User/);
 });
 
 test('document title removes unsafe path characters', () => {
