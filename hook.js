@@ -485,6 +485,12 @@ function buildClassicModeMessages(normalizedMessages) {
       .filter(Boolean);
 
     if (userMessages.length === 0) {
+      try {
+        const path = require('path');
+        const lp = path.join(SCRIPT_DIR, '..', '..', '..', 'temp', 'codex-classic-trace.log');
+        const segUsers = segment.filter(m => m.role === 'user').map(m => ({parts:(m.parts||[]).filter(p=>p.type==='text').map(p=>({t:!!String(p.text||'').trim(),len:String(p.text||'').length}))}));
+        require('fs').appendFileSync(lp, 'CLASSIC SKIP segment: no user after toTextOnly, segUsers=' + JSON.stringify(segUsers) + '\n', 'utf8');
+      } catch {}
       continue;
     }
 
