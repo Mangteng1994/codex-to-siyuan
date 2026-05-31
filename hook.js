@@ -376,6 +376,46 @@ function filterMessagesBySyncMode(normalizedMessages, syncMode, lastAssistantMes
   return finalAssistant ? [...userMessages, finalAssistant] : userMessages;
 }
 
+/**
+ * Decide whether first-run fallback write should be deferred.
+ * Classic/full mode should not create an assistant-only first record when the
+ * transcript has not exposed the user message yet.
+ * @param {object} opts
+ * @param {boolean} opts.isFirstRun
+ * @param {string} opts.syncMode
+ * @param {Array} opts.normalizedMessages
+ * @returns {boolean}
+ */
+function shouldDeferFirstFallbackWrite({ isFirstRun, syncMode, normalizedMessages }) {
+  if (!isFirstRun) return false;
+
+  const mode = ['classic', 'minimal', 'full'].includes(syncMode) ? syncMode : 'classic';
+  if (mode === 'minimal') return false;
+
+  const hasUserText = Array.isArray(normalizedMessages) && normalizedMessages.some((msg) =>
+    msg
+    && msg.role === 'user'
+    && Array.isArray(msg.parts)
+    && msg.parts.some((part) => part && part.type === 'text' && String(part.text || '').trim())
+  );
+
+  return !hasUserText;
+}
+
+/**
+ * Keep transcript offset unchanged when first-run fallback write is deferred.
+ * Otherwise the first turn will be skipped on next incremental parse.
+ * @param {object} state
+ * @param {number} previousByteOffset
+ * @returns {object}
+ */
+function preserveStateForDeferredFirstWrite(state, previousByteOffset) {
+  return {
+    ...state,
+    lastByteOffset: Number.isFinite(previousByteOffset) ? previousByteOffset : 0,
+  };
+}
+
 async function main() {
   // 1. Read Codex hook input from stdin
   const raw = await readStdin();
@@ -415,6 +455,7 @@ async function main() {
   const headerTemplate = config.headerTemplate || DEFAULT_HEADER_TEMPLATE;
   const parentPath = config.parentPath || '/Codex Sessions';
   const pathTemplate = config.pathTemplate || DEFAULT_PATH_TEMPLATE;
+  const syncMode = config.syncMode || 'classic';
   const port = config.siyuanPort || '6806';
   const siyuanUrl = config.siyuanUrl || `http://127.0.0.1:${port}`;
   const token = config.siyuanToken || getSiYuanToken();
@@ -441,6 +482,7 @@ async function main() {
 
   // 5. Parse transcript from last offset
   let messages = [];
+  const previousByteOffset = state.lastByteOffset;
   let newByteOffset = state.lastByteOffset;
 
   if (transcriptPath && fs.existsSync(transcriptPath)) {
@@ -473,8 +515,11 @@ async function main() {
 
   messages = normalizeMessages(messages);
   messages = filterMessages(messages, config);
-
-  const syncMode = config.syncMode || 'classic';
+  if (shouldDeferFirstFallbackWrite({ isFirstRun, syncMode, normalizedMessages: messages })) {
+    state = preserveStateForDeferredFirstWrite(state, previousByteOffset);
+    saveState(sessionId, state);
+    return;
+  }
   messages = filterMessagesBySyncMode(messages, syncMode, lastAssistantMessage);
 
   if (messages.length === 0) {
@@ -539,6 +584,8 @@ module.exports = {
   buildFallbackAssistantMessage,
   buildFinalAssistantMessage,
   filterMessagesBySyncMode,
+  shouldDeferFirstFallbackWrite,
+  preserveStateForDeferredFirstWrite,
   parsePatternLines,
   wildcardToRegExp,
   matchesAnyPattern,

@@ -6,6 +6,17 @@
 const fs = require('fs');
 
 /**
+ * 清理消息文本中的环境上下文块。
+ * @param {string} text
+ * @returns {string}
+ */
+function cleanMessageText(text) {
+  return String(text || '')
+    .replace(/<environment_context>[\s\S]*?<\/environment_context>\s*/g, '')
+    .trim();
+}
+
+/**
  * Parse a JSONL transcript file starting from a given byte offset.
  *
  * @param {string} filePath    - Path to the .jsonl transcript file
@@ -83,11 +94,13 @@ function parseMessage(entry, turnId = null) {
   const parts = [];
 
   if (typeof rawContent === 'string') {
-    parts.push({ type: 'text', text: rawContent });
+    const text = cleanMessageText(rawContent);
+    if (text) parts.push({ type: 'text', text });
   } else if (Array.isArray(rawContent)) {
     for (const block of rawContent) {
       if (block.type === 'text' && block.text) {
-        parts.push({ type: 'text', text: block.text });
+        const text = cleanMessageText(block.text);
+        if (text) parts.push({ type: 'text', text });
       } else if (block.type === 'tool_use') {
         parts.push({
           type: 'tool_use',
@@ -166,12 +179,14 @@ function parseCodexMessage(role, timestamp, rawContent, turnId = null) {
   const parts = [];
 
   if (typeof rawContent === 'string') {
-    parts.push({ type: 'text', text: rawContent });
+    const text = cleanMessageText(rawContent);
+    if (text) parts.push({ type: 'text', text });
   } else if (Array.isArray(rawContent)) {
     for (const block of rawContent) {
       const text = block.text || '';
       if ((block.type === 'input_text' || block.type === 'output_text' || block.type === 'text') && text) {
-        parts.push({ type: 'text', text });
+        const sanitized = cleanMessageText(text);
+        if (sanitized) parts.push({ type: 'text', text: sanitized });
       }
     }
   }
@@ -227,7 +242,8 @@ function parseCodexToolResult(payload) {
  */
 function extractCodexReadableText(payload) {
   if (payload.type === 'reasoning' || payload.type === 'message_delta') {
-    return extractAnyText(payload.text || payload.content || payload.summary, 500);
+    const text = extractAnyText(payload.text || payload.content || payload.summary, 500);
+    return cleanMessageText(text);
   }
 
   return '';
@@ -473,6 +489,7 @@ function truncate(str, max) {
 }
 
 module.exports = {
+  cleanMessageText,
   parseTranscript,
   parseEntry,
   parseMessage,

@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const {
+  cleanMessageText,
   parseTranscript,
   normalizeMessages,
 } = require('../src/parser');
@@ -64,6 +65,81 @@ test('Codex response_item message parses user and assistant text', () => {
   assert.equal(messages[0].parts[0].text, 'question');
   assert.equal(messages[1].role, 'assistant');
   assert.equal(messages[1].parts[0].text, 'answer');
+});
+
+test('cleanMessageText removes environment_context and keeps real正文', () => {
+  const raw = `
+    <environment_context>
+      <cwd>C:\\demo</cwd>
+      <shell>powershell</shell>
+      <current_date>2026-05-31</current_date>
+      <timezone>Asia/Shanghai</timezone>
+    </environment_context>
+
+    测试
+  `;
+
+  assert.equal(cleanMessageText(raw), '测试');
+});
+
+test('cleanMessageText returns empty when only environment_context exists', () => {
+  const raw = `
+    <environment_context>
+      <cwd>C:\\demo</cwd>
+      <shell>powershell</shell>
+      <current_date>2026-05-31</current_date>
+      <timezone>Asia/Shanghai</timezone>
+    </environment_context>
+  `;
+
+  assert.equal(cleanMessageText(raw), '');
+});
+
+test('Codex user message strips environment_context before writing', () => {
+  const filePath = writeJsonl([
+    { type: 'turn_context', payload: { turn_id: 'turn-env-1' } },
+    {
+      timestamp: '2026-05-29T01:00:00.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'user',
+        content: [{
+          type: 'input_text',
+          text: '<environment_context><cwd>C:\\\\demo</cwd><shell>powershell</shell></environment_context>\n\n测试',
+        }],
+      },
+    },
+  ]);
+
+  const { messages } = parseTranscript(filePath, 0);
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].role, 'user');
+  assert.equal(messages[0].parts[0].text, '测试');
+});
+
+test('user message with only environment_context is ignored', () => {
+  const filePath = writeJsonl([
+    {
+      timestamp: '2026-05-29T01:00:00.000Z',
+      type: 'user',
+      message: {
+        content: `
+<environment_context>
+  <cwd>C:\\SiYuanData\\data\\plugins\\siyuan-plugin-gitee-pages</cwd>
+  <shell>powershell</shell>
+  <current_date>2026-05-31</current_date>
+  <timezone>Asia/Shanghai</timezone>
+</environment_context>
+        `,
+      },
+    },
+  ]);
+
+  const { messages } = parseTranscript(filePath, 0);
+
+  assert.equal(messages.length, 0);
 });
 
 test('three assistant response_items after one user render as one Codex heading', () => {

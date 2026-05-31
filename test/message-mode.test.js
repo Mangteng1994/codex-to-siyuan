@@ -165,6 +165,39 @@ test('full mode keeps all content including tool_use and tool_result', () => {
   assert.match(markdown, /final answer/);
 });
 
+test('classic/full mode user text is cleaned when transcript starts with environment_context', () => {
+  const filePath = writeJsonl([
+    { type: 'turn_context', payload: { turn_id: 'turn-env-2' } },
+    {
+      timestamp: '2026-05-29T01:00:00.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'user',
+        content: [{
+          type: 'input_text',
+          text: '<environment_context><cwd>C:\\\\demo</cwd><shell>powershell</shell></environment_context>\n\n测试',
+        }],
+      },
+    },
+    {
+      timestamp: '2026-05-29T01:00:01.000Z',
+      type: 'response_item',
+      payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'done' }] },
+    },
+  ]);
+  const { messages } = parseTranscript(filePath, 0);
+  const normalized = normalizeMessages(messages);
+
+  const classicMarkdown = formatMessages(filterMessagesBySyncMode(normalized, 'classic', null), TEMPLATE);
+  const fullMarkdown = formatMessages(normalized, TEMPLATE);
+
+  assert.match(classicMarkdown, /测试/);
+  assert.equal(classicMarkdown.includes('<environment_context>'), false);
+  assert.match(fullMarkdown, /测试/);
+  assert.equal(fullMarkdown.includes('<environment_context>'), false);
+});
+
 // ── Old config compatibility ──────────────────────────────────────
 
 test('undefined syncMode defaults to classic', () => {

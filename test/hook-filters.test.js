@@ -5,6 +5,8 @@ const {
   shouldSyncProject,
   filterMessages,
   renderPathTemplate,
+  shouldDeferFirstFallbackWrite,
+  preserveStateForDeferredFirstWrite,
 } = require('../hook');
 
 test('项目白名单为空时默认允许同步', () => {
@@ -79,4 +81,65 @@ test('路径模板渲染保持默认目录结构，并支持自定义项目层�
     title: 'hello',
     sessionId: 'sid-1',
   }), '/Codex Sessions/demo/2026-05-31/hello');
+});
+
+test('首轮经典模式在没有 user 文本时，应延迟 assistant fallback 落库', () => {
+  assert.equal(shouldDeferFirstFallbackWrite({
+    isFirstRun: true,
+    syncMode: 'classic',
+    normalizedMessages: [
+      {
+        role: 'assistant',
+        parts: [{ type: 'text', text: '在。可试之。' }],
+      },
+    ],
+  }), true);
+});
+
+test('首轮经典模式有 user 文本时，不应延迟写入', () => {
+  assert.equal(shouldDeferFirstFallbackWrite({
+    isFirstRun: true,
+    syncMode: 'classic',
+    normalizedMessages: [
+      {
+        role: 'user',
+        parts: [{ type: 'text', text: '测试' }],
+      },
+      {
+        role: 'assistant',
+        parts: [{ type: 'text', text: '在。可试之。' }],
+      },
+    ],
+  }), false);
+});
+
+test('极简模式允许首轮 assistant-only fallback 直接写入', () => {
+  assert.equal(shouldDeferFirstFallbackWrite({
+    isFirstRun: true,
+    syncMode: 'minimal',
+    normalizedMessages: [
+      {
+        role: 'assistant',
+        parts: [{ type: 'text', text: '只写最终回答' }],
+      },
+    ],
+  }), false);
+});
+
+test('首轮 defer 时必须保留原 lastByteOffset，避免跳过第一轮 transcript', () => {
+  const state = {
+    sessionId: 'sid-1',
+    docId: null,
+    lastByteOffset: 120,
+    lastFallbackHash: 'abc',
+  };
+
+  const next = preserveStateForDeferredFirstWrite({
+    ...state,
+    lastByteOffset: 999,
+  }, 120);
+
+  assert.equal(next.lastByteOffset, 120);
+  assert.equal(next.lastFallbackHash, 'abc');
+  assert.equal(next.docId, null);
 });
