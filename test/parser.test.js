@@ -650,6 +650,34 @@ test('debug needle scan finds skipped entry with matching text', () => {
   assert.match(stderrOutput, /payload\.type=/);
 });
 
+
+test('payload.type=turn_input with payload.role=user parses as user message', () => {
+  const filePath = writeJsonl([
+    { type: 'turn_context', payload: { turn_id: 'turn-input-nested' } },
+    {
+      timestamp: '2026-05-31T15:00:00.000Z',
+      type: 'codex_event',
+      payload: { type: 'turn_input', role: 'user', input: '<environment_context><cwd>C:\\demo</cwd></environment_context>\n\n测试首轮用户123' },
+    },
+    {
+      timestamp: '2026-05-31T15:00:01.000Z',
+      type: 'response_item',
+      payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '收到回复' }] },
+    },
+  ]);
+
+  const { messages } = parseTranscript(filePath, 0);
+
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0].role, 'user');
+  assert.equal(messages[0].turnId, 'turn-input-nested');
+  assert.match(messages[0].parts[0].text, /测试首轮用户123/);
+  assert.equal(messages[0].parts[0].text.includes('environment_context'), false);
+
+  assert.equal(messages[1].role, 'assistant');
+  assert.match(messages[1].parts[0].text, /收到回复/);
+});
+
 test('document title removes unsafe path characters', () => {
   const unsafe = 'a/b\\c:d*e?f"g<h>i|j   k';
   const { title } = generateDocHeader({

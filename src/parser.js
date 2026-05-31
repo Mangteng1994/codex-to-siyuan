@@ -150,6 +150,18 @@ function parseExplicitUserEntry(entry, turnId = null) {
     ]);
   }
 
+  // payload.type === 'turn_input' with payload.role === 'user'
+  // catches {type:"some_new_codex_event", payload:{type:"turn_input",role:"user",input:"..."}}
+  if (payloadType === 'turn_input' && String(payload.role || '').toLowerCase() === 'user') {
+    return buildExplicitUserMessage(entry, timestamp, resolvedTurnId, [
+      ['payload.input', payload && payload.input],
+      ['payload.content', payload && payload.content],
+      ['payload.text', payload && payload.text],
+      ['payload.message.content', payload && payload.message && payload.message.content],
+      ['payload.message', payload && payload.message],
+    ]);
+  }
+
   return null;
 }
 
