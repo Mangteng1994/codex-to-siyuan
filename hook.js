@@ -280,16 +280,25 @@ function shouldSyncProject(cwd, config) {
  */
 function filterMessages(messages, config) {
   const patterns = parsePatternLines(config && config.excludeContentPatterns);
+  if (patterns.length > 0) {
+    process.stderr.write('[codex-to-siyuan] FILTER active, patterns=' + JSON.stringify(patterns) + '\n');
+  }
   if (patterns.length === 0) {
     return messages;
   }
 
+  // Log filter patterns for debugging
+  process.stderr.write('[codex-to-siyuan] FILTER patterns: ' + JSON.stringify(patterns) + '\n');
   return messages
     .map((message) => {
       const parts = Array.isArray(message.parts) ? message.parts.filter((part) => {
         const text = part && part.text ? String(part.text) : '';
         const input = part && part.input ? String(part.input) : '';
-        return !matchesAnyPattern(text, patterns) && !matchesAnyPattern(input, patterns);
+        const matched = matchesAnyPattern(text, patterns) || matchesAnyPattern(input, patterns);
+        if (matched && text) {
+          process.stderr.write('[codex-to-siyuan] FILTER removed: role=' + message.role + ' text=' + JSON.stringify(text.slice(0,80)) + '\n');
+        }
+        return !matched;
       }) : [];
 
       return { ...message, parts };
