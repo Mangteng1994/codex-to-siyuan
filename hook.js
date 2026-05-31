@@ -89,7 +89,7 @@ function loadConfig() {
 const DEFAULT_TEMPLATE = '## ${role} (${time})\n\n${content}\n\n---\n';
 const DEFAULT_HEADER_TEMPLATE =
   '# ${projectName}\n\n- 项目: ${projectName}\n- 开始时间: ${date} ${time}\n- Session ID: ${sessionId}\n\n---\n';
-const DEFAULT_PATH_TEMPLATE = '${parentPath}/${date}/${title}';
+const DEFAULT_PATH_TEMPLATE = '${parentPath}/${date}/${title}-${sessionIdShort}';
 
 // ── SiYuan API token loading ──────────────────────────────────────
 
@@ -140,6 +140,25 @@ function getSiYuanToken() {
 function debugLog(message) {
   if (process.env.CODEX_TO_SIYUAN_DEBUG !== '1') return;
   process.stderr.write(`[codex-to-siyuan] ${message}\n`);
+}
+
+// ── Debug log file ────────────────────────────────────────────────
+const DEBUG_LOG_PATH = path.join(os.tmpdir(), 'codex-to-siyuan-debug.log');
+
+/**
+ * Write debug log entry to file.
+ * Appends a timestamped line when CODEX_TO_SIYUAN_DEBUG=1.
+ * All file I/O errors are silently swallowed.
+ * @param {string} message
+ */
+function debugLogFile(message) {
+  if (process.env.CODEX_TO_SIYUAN_DEBUG !== '1') return;
+  try {
+    const ts = new Date().toISOString();
+    fs.appendFileSync(DEBUG_LOG_PATH, `[${ts}] ${message}\n`, 'utf8');
+  } catch {
+    // Never let debug logging break the hook.
+  }
 }
 
 /**
@@ -574,6 +593,25 @@ function debugMessageList(label, messages) {
   });
 }
 
+/**
+ * Log message summary to debug file (same format as debugMessageList).
+ * @param {string} label
+ * @param {Array} messages
+ */
+function debugMessageListFile(label, messages) {
+  if (process.env.CODEX_TO_SIYUAN_DEBUG !== '1') return;
+  (messages || []).forEach((msg, index) => {
+    const text = Array.isArray(msg.parts)
+      ? msg.parts
+        .filter((part) => part && part.type === 'text')
+        .map((part) => String(part.text || ''))
+        .join('\n')
+        .slice(0, 80)
+      : '';
+    debugLogFile(`${label}[${index}]: role=${msg?.role || ''}, turnId=${msg?.turnId || ''}, source=${msg?.source || ''}, text=${JSON.stringify(text)}`);
+  });
+}
+
 async function main() {
   // 1. Read Codex hook input from stdin
   const raw = await readStdin();
@@ -594,6 +632,8 @@ async function main() {
     process.stderr.write('[codex-to-siyuan] Missing session_id or transcript_path in hook input\n');
     return;
   }
+
+  debugLogFile(`hook entry: sessionId=${sessionId}, cwd=${cwd}, transcriptPath=${transcriptPath || ''}`);
 
   // 2. Load config
   let config;
@@ -638,6 +678,8 @@ async function main() {
     };
   }
 
+  debugLogFile(`state loaded: isFirstRun=${isFirstRun}, docId=${state.docId || 'null'}, previousByteOffset=${state.lastByteOffset}`);
+
   // 5. Parse transcript from last offset
   let messages = [];
   let rawParsedMessages = [];
@@ -652,15 +694,20 @@ async function main() {
   }
 
   debugLog(`hook summary start: sessionId=${sessionId}, transcriptPath=${transcriptPath || ''}, previousByteOffset=${previousByteOffset}, newByteOffset=${newByteOffset}, rawParsedMessages=${rawParsedMessages.length}`);
+  debugLogFile(`hook summary start: sessionId=${sessionId}, transcriptPath=${transcriptPath || ''}, previousByteOffset=${previousByteOffset}, newByteOffset=${newByteOffset}, rawParsedMessages=${rawParsedMessages.length}`);
   debugMessageList('raw parsed message', rawParsedMessages);
 
   if (messages.length === 0) {
+    process.stderr.write(`[codex-to-siyuan] no messages parsed from transcript (isFirstRun=${isFirstRun}), will try fallback or defer
+`);
     const fallbackMessage = buildFallbackAssistantMessage(lastAssistantMessage);
     state.lastByteOffset = newByteOffset;
 
     if (!fallbackMessage) {
       if (shouldDeferFirstFallbackWrite({ isFirstRun, syncMode, normalizedMessages: [] })) {
         debugLog('defer because no user text parsed');
+        debugLogFile('defer (fallback empty): no user text parsed, messages array empty');
+        process.stderr.write('[codex-to-siyuan] defer (fallback empty): no messages and no fallback, will retry next turn\n');
         state = preserveStateForDeferredFirstWrite(state, previousByteOffset);
       }
       // Nothing new — update offset and exit
@@ -683,11 +730,14 @@ async function main() {
   messages = normalizeMessages(messages);
   messages = filterMessages(messages, config);
   debugLog(`hook summary normalized: normalizedMessages=${messages.length}`);
+  debugLogFile(`hook summary normalized: normalizedMessages=${messages.length}`);
   debugMessageList('normalized message', messages);
 
   const mode = ['classic', 'minimal', 'full'].includes(syncMode) ? syncMode : 'classic';
   if (isFirstRun && mode === 'classic' && hasLeadingAssistantOnlySegment(messages)) {
     debugLog('leading assistant-only segment discarded; defer and keep offset');
+    debugLogFile('defer (leading assistant-only segment): discarding and keeping offset');
+    debugMessageListFile('deferred normalized message', messages);
     state = preserveStateForDeferredFirstWrite(state, previousByteOffset);
     saveState(sessionId, state);
     return;
@@ -695,15 +745,21 @@ async function main() {
 
   if (shouldDeferFirstFallbackWrite({ isFirstRun, syncMode, normalizedMessages: messages })) {
     debugLog('defer because no user text parsed');
+    debugLogFile('defer (normalized): no user text parsed');
+    debugMessageListFile('deferred normalized message', messages);
+    process.stderr.write(`[codex-to-siyuan] defer (normalized): ${messages.length} messages but no user text — will retry next turn
+`);
     state = preserveStateForDeferredFirstWrite(state, previousByteOffset);
     saveState(sessionId, state);
     return;
   }
   messages = filterMessagesBySyncMode(messages, syncMode, lastAssistantMessage);
   debugLog(`hook summary filtered: syncMode=${syncMode}, filteredMessages=${messages.length}`);
+  debugLogFile(`hook summary filtered: syncMode=${syncMode}, filteredMessages=${messages.length}`);
   debugMessageList('filtered message', messages);
 
   if (messages.length === 0) {
+    process.stderr.write('[codex-to-siyuan] all messages filtered out after sync mode filter -- nothing to write\n');
     saveState(sessionId, state);
     return;
   }
@@ -713,6 +769,7 @@ async function main() {
 
   // 7. Create or append to SiYuan doc
   const api = new SiYuanAPI(siyuanUrl, token);
+  const sessionIdShort = (sessionId || '').slice(0, 8);
 
   if (!state.docId) {
     // First run — create a new document
@@ -737,15 +794,61 @@ async function main() {
       projectName,
       title,
       sessionId,
+      sessionIdShort,
     });
 
-    const fullMarkdown = header + '\n' + markdown;
-    const docId = await api.createDocWithMd(config.notebook, docPath, fullMarkdown);
+    debugLogFile(`createDocWithMd attempt: docPath=${docPath}, notebook=${config.notebook}`);
 
-    state.docId = docId;
+    const fullMarkdown = header + '\n' + markdown;
+    try {
+      const docId = await api.createDocWithMd(config.notebook, docPath, fullMarkdown);
+      debugLogFile(`createDocWithMd success: docId=${docId}`);
+      debugLog(`createDocWithMd success: docId=${docId}`);
+      process.stderr.write(`[codex-to-siyuan] createDocWithMd success: docId=${docId}, path=${docPath}\n`);
+      state.docId = docId;
+    } catch (createErr) {
+      const errMsg = String(createErr && createErr.message ? createErr.message : createErr);
+      debugLogFile(`createDocWithMd FAILED: docPath=${docPath}, error=${errMsg}`);
+      process.stderr.write(`[codex-to-siyuan] createDocWithMd FAILED: docPath=${docPath}, error=${errMsg}\n`);
+
+      // Check if error looks like path already exists
+      const looksLikePathExists =
+        /exists|already|\u5df2\u5b58\u5728|exist|duplicate/i.test(errMsg);
+
+      if (looksLikePathExists) {
+        const fallbackPath = `${docPath}-${sessionIdShort}`;
+        debugLogFile(`createDocWithMd fallback retry: fallbackPath=${fallbackPath}`);
+        process.stderr.write(`[codex-to-siyuan] createDocWithMd fallback retry: fallbackPath=${fallbackPath}\n`);
+        try {
+          const fallbackId = await api.createDocWithMd(config.notebook, fallbackPath, fullMarkdown);
+          debugLogFile(`createDocWithMd fallback success: docId=${fallbackId}`);
+          debugLog(`createDocWithMd fallback success: docId=${fallbackId}`);
+          process.stderr.write(`[codex-to-siyuan] createDocWithMd fallback success: docId=${fallbackId}, path=${fallbackPath}\n`);
+          state.docId = fallbackId;
+        } catch (fallbackErr) {
+          const fbMsg = String(fallbackErr && fallbackErr.message ? fallbackErr.message : fallbackErr);
+          debugLogFile(`createDocWithMd fallback ALSO FAILED: fallbackPath=${fallbackPath}, error=${fbMsg}`);
+          process.stderr.write(`[codex-to-siyuan] createDocWithMd fallback ALSO FAILED: fallbackPath=${fallbackPath}, error=${fbMsg}\n`);
+          // Do NOT advance state — return without saving
+          return;
+        }
+      } else {
+        // Non-path-exists error — do not advance state
+        return;
+      }
+    }
   } else {
     // Subsequent run — append to existing doc
-    await api.appendBlock(state.docId, markdown);
+    debugLogFile(`appendBlock attempt: docId=${state.docId}`);
+    try {
+      await api.appendBlock(state.docId, markdown);
+      debugLogFile(`appendBlock success: docId=${state.docId}`);
+    } catch (appendErr) {
+      const errMsg = String(appendErr && appendErr.message ? appendErr.message : appendErr);
+      debugLogFile(`appendBlock FAILED: docId=${state.docId}, error=${errMsg}`);
+      process.stderr.write(`[codex-to-siyuan] appendBlock FAILED: docId=${state.docId}, error=${errMsg}\n`);
+      // Append failure is not fatal — continue to save state anyway
+    }
   }
 
   // 8. Save session state

@@ -165,3 +165,35 @@ test('首轮 classic 如果前导 assistant-only 后面才有 user，应识别�
     { role: 'assistant', turnId: 'turn-1', parts: [{ type: 'text', text: '第一轮回复' }] },
   ]), false);
 });
+
+
+test('路径模板支持 sessionIdShort 变量替换', () => {
+  assert.equal(renderPathTemplate('${parentPath}/${date}/${title}-${sessionIdShort}', {
+    parentPath: '/Codex Sessions',
+    date: '2026-05-31',
+    title: 'hello-你好',
+    sessionId: 'abcdef12-3456-7890-abcd-ef1234567890',
+    sessionIdShort: 'abcdef12',
+  }), '/Codex Sessions/2026-05-31/hello-你好-abcdef12');
+
+  // Default template should also work with sessionIdShort
+  assert.equal(renderPathTemplate('${parentPath}/${date}/${title}-${sessionIdShort}', {
+    parentPath: '/Codex Sessions',
+    date: '2026-05-31',
+    title: 'demo - 你好',
+    sessionId: '12345678-abcd',
+    sessionIdShort: '12345678',
+  }), '/Codex Sessions/2026-05-31/demo - 你好-12345678');
+});
+
+test('旧路径模板不含 sessionIdShort 时仍可正常渲染', () => {
+  // Old template without sessionIdShort still works (just leaves the variable as-is)
+  // But in practice, the fallback mechanism handles path conflicts
+  assert.equal(renderPathTemplate('${parentPath}/${date}/${title}', {
+    parentPath: '/Codex Sessions',
+    date: '2026-05-31',
+    title: 'hello',
+    sessionId: 'sid-1',
+    sessionIdShort: 'sid-1',
+  }), '/Codex Sessions/2026-05-31/hello');
+});
