@@ -627,7 +627,7 @@ function debugDumpTranscript(transcriptPath) {
     const raw = fs.readFileSync(transcriptPath, 'utf8');
     const lines = raw.split('\n').filter(l => l.trim());
     process.stderr.write(`[codex-to-siyuan] TRANSCRIPT DUMP (${lines.length} lines):\n`);
-    const dumpPath = path.join(os.tmpdir(), 'codex-to-siyuan-transcript-dump.txt');
+    const dumpPath = path.join(SCRIPT_DIR, '..', '..', '..', 'temp', 'codex-transcript-dump.txt');
     fs.writeFileSync(dumpPath, `TRANSCRIPT DUMP (${lines.length} lines):\n` + lines.map((l, i) => {
       try {
         const e = JSON.parse(l);
