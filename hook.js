@@ -138,7 +138,7 @@ function getSiYuanToken() {
  * @param {string} message
  */
 function debugLog(message) {
-  if (process.env.CODEX_TO_SIYUAN_DEBUG !== '1') return;
+  // DEBUG: env check bypassed
   process.stderr.write(`[codex-to-siyuan] ${message}\n`);
 }
 
@@ -151,8 +151,20 @@ const DEBUG_LOG_PATH = path.join(os.tmpdir(), 'codex-to-siyuan-debug.log');
  * All file I/O errors are silently swallowed.
  * @param {string} message
  */
+/**
+ * Always-write log to a known file for diagnosing user structure.
+ * @param {string} msg
+ */
+function alwaysLog(msg) {
+  try {
+    const logPath = path.join(SCRIPT_DIR, '..', '..', '..', 'temp', 'codex-hook-debug.log');
+    const ts = new Date().toISOString();
+    fs.appendFileSync(logPath, '[' + ts + '] ' + msg + '\n', 'utf8');
+  } catch {}
+}
+
 function debugLogFile(message) {
-  if (process.env.CODEX_TO_SIYUAN_DEBUG !== '1') return;
+  // DEBUG: env check bypassed
   try {
     const ts = new Date().toISOString();
     fs.appendFileSync(DEBUG_LOG_PATH, `[${ts}] ${message}\n`, 'utf8');
@@ -584,7 +596,7 @@ function preserveStateForDeferredFirstWrite(state, previousByteOffset) {
  * @param {Array} messages
  */
 function debugMessageList(label, messages) {
-  if (process.env.CODEX_TO_SIYUAN_DEBUG !== '1') return;
+  // DEBUG: env check bypassed
   (messages || []).forEach((msg, index) => {
     const text = Array.isArray(msg.parts)
       ? msg.parts
@@ -603,7 +615,7 @@ function debugMessageList(label, messages) {
  * @param {Array} messages
  */
 function debugMessageListFile(label, messages) {
-  if (process.env.CODEX_TO_SIYUAN_DEBUG !== '1') return;
+  // DEBUG: env check bypassed
   (messages || []).forEach((msg, index) => {
     const text = Array.isArray(msg.parts)
       ? msg.parts
@@ -626,6 +638,7 @@ function debugDumpTranscript(transcriptPath) {
   try {
     const raw = fs.readFileSync(transcriptPath, 'utf8');
     const lines = raw.split('\n').filter(l => l.trim());
+    alwaysLog('TRANSCRIPT DUMP: ' + lines.length + ' lines');
     process.stderr.write(`[codex-to-siyuan] TRANSCRIPT DUMP (${lines.length} lines):\n`);
     const dumpPath = path.join(SCRIPT_DIR, '..', '..', '..', 'temp', 'codex-transcript-dump.txt');
     fs.writeFileSync(dumpPath, `TRANSCRIPT DUMP (${lines.length} lines):\n` + lines.map((l, i) => {
@@ -653,6 +666,7 @@ function debugDumpTranscript(transcriptPath) {
       process.stderr.write(`  ... (${lines.length - 20} more lines)\n`);
     }
   } catch (e) {
+    alwaysLog('TRANSCRIPT DUMP: ' + lines.length + ' lines');
     process.stderr.write(`[codex-to-siyuan] TRANSCRIPT DUMP failed: ${e.message}\n`);
   }
 }
@@ -678,6 +692,7 @@ async function main() {
     return;
   }
 
+  alwaysLog('hook entry: sessionId=' + sessionId + ' cwd=' + cwd);
   debugLogFile(`hook entry: sessionId=${sessionId}, cwd=${cwd}, transcriptPath=${transcriptPath || ''}`);
 
   // 2. Load config
@@ -754,11 +769,13 @@ async function main() {
       && !_hasUserText(rawParsedMessages)) {
     const retryDelays = [300, 700];
     for (const delay of retryDelays) {
+      alwaysLog('RETRY waiting ' + delay + 'ms');
       debugLog(`short retry: waiting ${delay}ms for transcript user text...`);
       debugLogFile(`short retry: waiting ${delay}ms for transcript user text...`);
       await new Promise(resolve => setTimeout(resolve, delay));
       const retryResult = parseTranscript(transcriptPath, state.lastByteOffset);
       if (_hasUserText(retryResult.messages)) {
+        alwaysLog('RETRY SUCCESS at ' + delay + 'ms');
         debugLog(`short retry SUCCESS at ${delay}ms: found user text`);
         debugLogFile(`short retry SUCCESS at ${delay}ms: found user text`);
         messages = retryResult.messages;
@@ -766,6 +783,7 @@ async function main() {
         newByteOffset = retryResult.newByteOffset;
         break;
       }
+      alwaysLog('RETRY still no user at ' + delay + 'ms');
       debugLog(`short retry at ${delay}ms: still no user text`);
       debugLogFile(`short retry at ${delay}ms: still no user text`);
     }
@@ -777,12 +795,14 @@ async function main() {
   }
 
   debugLog(`hook summary start: sessionId=${sessionId}, transcriptPath=${transcriptPath || ''}, previousByteOffset=${previousByteOffset}, newByteOffset=${newByteOffset}, rawParsedMessages=${rawParsedMessages.length}`);
+  alwaysLog('hook summary: rawParsed=' + rawParsedMessages.length + ' hasUser=' + _hasUserText(rawParsedMessages));
   debugLogFile(`hook summary start: sessionId=${sessionId}, transcriptPath=${transcriptPath || ''}, previousByteOffset=${previousByteOffset}, newByteOffset=${newByteOffset}, rawParsedMessages=${rawParsedMessages.length}`);
   debugMessageList('raw parsed message', rawParsedMessages);
 
   let shouldAdvanceByteOffset = false;
 
   if (messages.length === 0) {
+    alwaysLog('FALLBACK: no messages parsed, isFirstRun=' + isFirstRun);
     process.stderr.write(`[codex-to-siyuan] no messages parsed from transcript (isFirstRun=${isFirstRun}), will try fallback\n`);
     const fallbackMessage = buildFallbackAssistantMessage(lastAssistantMessage);
 
