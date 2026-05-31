@@ -798,6 +798,7 @@ async function main() {
   alwaysLog('hook summary: rawParsed=' + rawParsedMessages.length + ' hasUser=' + _hasUserText(rawParsedMessages));
   debugLogFile(`hook summary start: sessionId=${sessionId}, transcriptPath=${transcriptPath || ''}, previousByteOffset=${previousByteOffset}, newByteOffset=${newByteOffset}, rawParsedMessages=${rawParsedMessages.length}`);
   debugMessageList('raw parsed message', rawParsedMessages);
+  alwaysLog('raw detail: ' + JSON.stringify(rawParsedMessages.map(m => ({role:m.role,turnId:m.turnId,texts:(m.parts||[]).filter(p=>p.type==='text').map(p=>String(p.text||'').slice(0,60))}))));
 
   let shouldAdvanceByteOffset = false;
 
@@ -829,6 +830,7 @@ async function main() {
   debugLog(`hook summary normalized: normalizedMessages=${messages.length}`);
   debugLogFile(`hook summary normalized: normalizedMessages=${messages.length}`);
   debugMessageList('normalized message', messages);
+  alwaysLog('normalized detail: ' + JSON.stringify(messages.map(m => ({role:m.role,turnId:m.turnId,texts:(m.parts||[]).filter(p=>p.type==='text').map(p=>String(p.text||'').slice(0,60))}))));
 
   messages = filterMessagesBySyncMode(messages, syncMode, lastAssistantMessage);
   debugLog(`hook summary filtered: syncMode=${syncMode}, filteredMessages=${messages.length}`);
