@@ -627,6 +627,14 @@ function debugDumpTranscript(transcriptPath) {
     const raw = fs.readFileSync(transcriptPath, 'utf8');
     const lines = raw.split('\n').filter(l => l.trim());
     process.stderr.write(`[codex-to-siyuan] TRANSCRIPT DUMP (${lines.length} lines):\n`);
+    const dumpPath = path.join(os.tmpdir(), 'codex-to-siyuan-transcript-dump.txt');
+    fs.writeFileSync(dumpPath, `TRANSCRIPT DUMP (${lines.length} lines):\n` + lines.map((l, i) => {
+      try {
+        const e = JSON.parse(l);
+        const pl = e && e.payload || {};
+        return `  [${i}] type=${e.type} ptype=${pl.type} prole=${pl.role} keys=[${Object.keys(e).join(',')}]`;
+      } catch { return `  [${i}] (non-JSON) ${l.slice(0,200)}`; }
+    }).join('\n'), 'utf8');
     for (let i = 0; i < Math.min(lines.length, 20); i++) {
       try {
         const entry = JSON.parse(lines[i]);
@@ -764,7 +772,7 @@ async function main() {
   }
 
   // 5b. Debug: dump transcript structure when first run still has no user text
-  if (isFirstRun && process.env.CODEX_TO_SIYUAN_DEBUG === '1' && !_hasUserText(rawParsedMessages)) {
+  if (isFirstRun && !_hasUserText(rawParsedMessages)) {
     debugDumpTranscript(transcriptPath);
   }
 
