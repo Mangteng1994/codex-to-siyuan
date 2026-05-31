@@ -292,6 +292,8 @@ function filterMessages(messages, config) {
   return messages
     .map((message) => {
       const parts = Array.isArray(message.parts) ? message.parts.filter((part) => {
+        // Text parts are user/assistant content — never filter these
+        if (part && part.type === "text") return true;
         const text = part && part.text ? String(part.text) : '';
         const input = part && part.input ? String(part.input) : '';
         const matched = matchesAnyPattern(text, patterns) || matchesAnyPattern(input, patterns);
