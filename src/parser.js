@@ -456,6 +456,14 @@ function normalizeMessages(messages) {
   const normalized = [];
   let index = 0;
 
+  // DEBUG: log input
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const logPath = path.join(__dirname, '..', '..', '..', 'temp', 'codex-norm-debug.log');
+    fs.appendFileSync(logPath, 'NORM IN: ' + JSON.stringify(messages.map(m => ({role:m.role,turnId:m.turnId,partsCount:m.parts?m.parts.length:0,valid:Boolean(m&&m.role&&Array.isArray(m.parts)&&m.parts.length>0)}))) + '\n', 'utf8');
+  } catch {}
+
   while (index < messages.length) {
     const message = messages[index];
     if (!isValidMessage(message)) {
@@ -482,6 +490,12 @@ function normalizeMessages(messages) {
     index += 1;
   }
 
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const logPath = path.join(__dirname, '..', '..', '..', 'temp', 'codex-norm-debug.log');
+    fs.appendFileSync(logPath, 'NORM OUT: ' + JSON.stringify(normalized.map(m => ({role:m.role,turnId:m.turnId,partsCount:m.parts?m.parts.length:0}))) + '\n', 'utf8');
+  } catch {}
   return normalized;
 }
 
