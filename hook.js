@@ -826,12 +826,15 @@ async function main() {
   }
 
   messages = normalizeMessages(messages);
+  alwaysLog('after normalize: ' + JSON.stringify(messages.map(m => ({role:m.role,texts:(m.parts||[]).filter(p=>p.type==='text').map(p=>String(p.text||'').slice(0,40))}))));
   messages = filterMessages(messages, config);
+  alwaysLog('after filterMessages: ' + JSON.stringify(messages.map(m => ({role:m.role,texts:(m.parts||[]).filter(p=>p.type==='text').map(p=>String(p.text||'').slice(0,40))}))));
   debugLog(`hook summary normalized: normalizedMessages=${messages.length}`);
   debugLogFile(`hook summary normalized: normalizedMessages=${messages.length}`);
   debugMessageList('normalized message', messages);
   alwaysLog('normalized detail: ' + JSON.stringify(messages.map(m => ({role:m.role,turnId:m.turnId,texts:(m.parts||[]).filter(p=>p.type==='text').map(p=>String(p.text||'').slice(0,60))}))));
 
+  alwaysLog('before syncMode filter: ' + JSON.stringify(messages.map(m => ({role:m.role,texts:(m.parts||[]).filter(p=>p.type==='text').map(p=>String(p.text||'').slice(0,40))}))));
   messages = filterMessagesBySyncMode(messages, syncMode, lastAssistantMessage);
   debugLog(`hook summary filtered: syncMode=${syncMode}, filteredMessages=${messages.length}`);
   alwaysLog('filtered: ' + messages.length + ' msgs, syncMode=' + syncMode);
