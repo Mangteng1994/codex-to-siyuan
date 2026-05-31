@@ -705,9 +705,8 @@ async function main() {
     process.stderr.write(`[codex-to-siyuan] no messages parsed from transcript (isFirstRun=${isFirstRun}), will try fallback or defer
 `);
     const fallbackMessage = buildFallbackAssistantMessage(lastAssistantMessage);
-    state.lastByteOffset = newByteOffset;
 
-        if (!fallbackMessage) {
+    if (!fallbackMessage) {
       // Nothing new -- update offset and exit
       saveState(sessionId, state);
       return;
