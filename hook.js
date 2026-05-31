@@ -679,6 +679,8 @@ async function main() {
       docId: null,
       lastByteOffset: 0,
       createdAt: new Date().toISOString(),
+      pendingFallbackHash: null,
+      pendingFallbackText: null,
     };
   }
 
@@ -704,8 +706,7 @@ async function main() {
   let shouldAdvanceByteOffset = false;
 
   if (messages.length === 0) {
-    process.stderr.write(`[codex-to-siyuan] no messages parsed from transcript (isFirstRun=\), will try fallback or defer
-`);
+    process.stderr.write(`[codex-to-siyuan] no messages parsed from transcript (isFirstRun=${isFirstRun}), will try fallback\n`);
     const fallbackMessage = buildFallbackAssistantMessage(lastAssistantMessage);
 
     if (!fallbackMessage) {
@@ -719,6 +720,8 @@ async function main() {
     }
 
     state.lastFallbackHash = fallbackHash;
+    state.pendingFallbackHash = fallbackHash;
+    state.pendingFallbackText = lastAssistantMessage;
     messages = [fallbackMessage];
   } else {
     shouldAdvanceByteOffset = true;
@@ -745,6 +748,8 @@ async function main() {
         return;
       }
       state.lastFallbackHash = fallbackHash;
+      state.pendingFallbackHash = fallbackHash;
+      state.pendingFallbackText = lastAssistantMessage;
       messages = [fallbackMessage];
       shouldAdvanceByteOffset = false;
     } else {
@@ -758,10 +763,32 @@ async function main() {
     state.lastByteOffset = newByteOffset;
   }
 
-  // 7. Format messages
+  // 7. Dedup pending fallback: skip assistant that matches pending fallback hash
+  if (shouldAdvanceByteOffset && state.pendingFallbackHash && messages.length > 0) {
+    const deduped = [];
+    let found = false;
+    for (const msg of messages) {
+      if (!found && msg.role === "assistant") {
+        const text = (msg.parts || [])
+          .filter(p => p && p.type === "text")
+          .map(p => String(p.text || ""))
+          .join("\n");
+        if (text && hashContent(text) === state.pendingFallbackHash) {
+          found = true;
+          continue;
+        }
+      }
+      deduped.push(msg);
+    }
+    if (found) {
+      messages = deduped;
+    }
+  }
+
+  // 8. Format messages
   const markdown = formatMessages(messages, template);
 
-  // 8. Create or append to SiYuan doc
+  // 9. Create or append to SiYuan doc
   const api = new SiYuanAPI(siyuanUrl, token);
   const sessionIdShort = (sessionId || '').slice(0, 8);
 
@@ -845,7 +872,16 @@ async function main() {
     }
   }
 
-  // 9. Save session state
+  // 10. Clear pending fallback after real user messages written
+  if (state.pendingFallbackHash && messages.length > 0) {
+    const hasRealUser = messages.some(m => m.role === "user");
+    if (hasRealUser) {
+      state.pendingFallbackHash = null;
+      state.pendingFallbackText = null;
+    }
+  }
+
+  // 11. Save session state
   saveState(sessionId, state);
 }
 

@@ -666,6 +666,207 @@ test('user+assistant transcript advances byteOffset normally', async () => {
   }
 });
 
+
+
+test('pending fallback dedup: round1 fallback, round2 skips matching assistant, only appends user', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hook-pend1-'));
+  const sessionId = `e2e-pend1-${Date.now()}-iii`;
+  const statePath = getStatePath(sessionId);
+  const transcriptPath = path.join(tempDir, 'session.jsonl');
+  const configPath = path.join(tempDir, 'config.json');
+
+  try { fs.rmSync(statePath, { force: true }); } catch {}
+  const fake = await startFakeSiYuanMultiSession();
+
+  try {
+    fs.writeFileSync(configPath, JSON.stringify({
+      notebook: 'notebook-pend1',
+      siyuanUrl: fake.baseUrl,
+      siyuanToken: 'token-pend1',
+      syncMode: 'classic',
+      parentPath: '/Codex Sessions',
+      pathTemplate: '${parentPath}/${date}/${title}-${sessionIdShort}',
+      template: '${role} (${time})\
+\
+${content}\
+\
+---\
+',
+      headerTemplate: '# ${projectName}\
+\
+---\
+',
+    }), 'utf8');
+
+    writeJsonl(transcriptPath, [
+      { type: 'turn_context', payload: { turn_id: 'turn-pend1-1' } },
+      {
+        timestamp: '2026-05-31T10:00:00.000Z',
+        type: 'response_item',
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'I will help with that.' }] },
+      },
+    ]);
+
+    const env = {
+      CODEX_TO_SIYUAN_CONFIG: configPath,
+      CODEX_TO_SIYUAN_DEBUG: '1',
+    };
+
+    const r1 = await runHook({
+      session_id: sessionId,
+      transcript_path: transcriptPath,
+      cwd: 'C:\\demo-pend1',
+      last_assistant_message: 'I will help with that.',
+    }, env);
+
+    assert.equal(r1.code, 0);
+    assert.equal(fake.requests.length, 1);
+    assert.equal(fake.requests[0].url, '/api/filetree/createDocWithMd');
+    assert.match(fake.requests[0].body.markdown, /I will help with that/);
+
+    let savedState = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    assert.equal(savedState.lastByteOffset, 0);
+    assert.ok(savedState.pendingFallbackHash);
+
+    writeJsonl(transcriptPath, [
+      { type: 'turn_context', payload: { turn_id: 'turn-pend1-2' } },
+      {
+        timestamp: '2026-05-31T10:00:01.000Z',
+        type: 'response_item',
+        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'help me' }] },
+      },
+      {
+        timestamp: '2026-05-31T10:00:02.000Z',
+        type: 'response_item',
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'I will help with that.' }] },
+      },
+    ]);
+
+    const r2 = await runHook({
+      session_id: sessionId,
+      transcript_path: transcriptPath,
+      cwd: 'C:\\demo-pend1',
+    }, env);
+
+    assert.equal(r2.code, 0);
+    assert.equal(fake.requests.length >= 2, true);
+    const appendBody = fake.requests[1].body.data || '';
+    assert.match(appendBody, /help me/);
+    assert.equal(appendBody.includes('I will help with that'), false);
+
+    savedState = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    assert.ok(savedState.lastByteOffset > 0);
+    assert.equal(savedState.pendingFallbackHash || null, null);
+
+    writeJsonl(transcriptPath, [
+      { type: 'turn_context', payload: { turn_id: 'turn-pend1-3' } },
+      {
+        timestamp: '2026-05-31T10:01:00.000Z',
+        type: 'response_item',
+        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'another question' }] },
+      },
+      {
+        timestamp: '2026-05-31T10:01:01.000Z',
+        type: 'response_item',
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'here is the answer' }] },
+      },
+    ]);
+
+    const r3 = await runHook({
+      session_id: sessionId,
+      transcript_path: transcriptPath,
+      cwd: 'C:\\demo-pend1',
+    }, env);
+
+    assert.equal(r3.code, 0);
+    const body3 = fake.requests[2].body.data || '';
+    assert.match(body3, /another question/);
+    assert.match(body3, /here is the answer/);
+  } finally {
+    await new Promise(resolve => fake.server.close(resolve));
+    fs.rmSync(statePath, { force: true });
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('fallback without matching assistant does not dedup later runs', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hook-pend2-'));
+  const sessionId = `e2e-pend2-${Date.now()}-jjj`;
+  const statePath = getStatePath(sessionId);
+  const transcriptPath = path.join(tempDir, 'session.jsonl');
+  const configPath = path.join(tempDir, 'config.json');
+
+  try { fs.rmSync(statePath, { force: true }); } catch {}
+  const fake = await startFakeSiYuanMultiSession();
+
+  try {
+    fs.writeFileSync(configPath, JSON.stringify({
+      notebook: 'notebook-pend2',
+      siyuanUrl: fake.baseUrl,
+      siyuanToken: 'token-pend2',
+      syncMode: 'classic',
+      parentPath: '/Codex Sessions',
+      pathTemplate: '${parentPath}/${date}/${title}-${sessionIdShort}',
+      template: '${role} (${time})\
+\
+${content}\
+\
+---\
+',
+      headerTemplate: '# ${projectName}\
+\
+---\
+',
+    }), 'utf8');
+
+    writeJsonl(transcriptPath, [
+      { type: 'turn_context', payload: { turn_id: 'turn-pend2-1' } },
+      {
+        timestamp: '2026-05-31T11:00:00.000Z',
+        type: 'response_item',
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'text A fallback' }] },
+      },
+    ]);
+
+    const r1 = await runHook({
+      session_id: sessionId,
+      transcript_path: transcriptPath,
+      cwd: 'C:\\demo-pend2',
+      last_assistant_message: 'text A fallback',
+    }, { CODEX_TO_SIYUAN_CONFIG: configPath, CODEX_TO_SIYUAN_DEBUG: '1' });
+
+    assert.equal(r1.code, 0);
+
+    writeJsonl(transcriptPath, [
+      { type: 'turn_context', payload: { turn_id: 'turn-pend2-2' } },
+      {
+        timestamp: '2026-05-31T11:01:00.000Z',
+        type: 'response_item',
+        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hello' }] },
+      },
+      {
+        timestamp: '2026-05-31T11:01:01.000Z',
+        type: 'response_item',
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'text B different' }] },
+      },
+    ]);
+
+    const r2 = await runHook({
+      session_id: sessionId,
+      transcript_path: transcriptPath,
+      cwd: 'C:\\demo-pend2',
+    }, { CODEX_TO_SIYUAN_CONFIG: configPath, CODEX_TO_SIYUAN_DEBUG: '1' });
+
+    assert.equal(r2.code, 0);
+    const appendBody = fake.requests[1].body.data || '';
+    assert.match(appendBody, /hello/);
+    assert.match(appendBody, /text B different/);
+  } finally {
+    await new Promise(resolve => fake.server.close(resolve));
+    fs.rmSync(statePath, { force: true });
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
 test('assistant-only first turn WITH last_assistant_message creates doc via fallback', async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hook-fbmsg-'));
   const sessionId = `e2e-fbmsg-${Date.now()}-fff`;
