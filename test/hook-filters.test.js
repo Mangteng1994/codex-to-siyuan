@@ -5,6 +5,7 @@ const {
   shouldSyncProject,
   filterMessages,
   renderPathTemplate,
+  isSessionFirstRun,
   shouldDeferFirstFallbackWrite,
   preserveStateForDeferredFirstWrite,
 } = require('../hook');
@@ -142,4 +143,11 @@ test('首轮 defer 时必须保留原 lastByteOffset，避免跳过第一轮 tra
   assert.equal(next.lastByteOffset, 120);
   assert.equal(next.lastFallbackHash, 'abc');
   assert.equal(next.docId, null);
+});
+
+test('只要 docId 为空，已保存 state 的 session 下次仍视为首轮', () => {
+  assert.equal(isSessionFirstRun(null), true);
+  assert.equal(isSessionFirstRun({ sessionId: 'sid-1', lastByteOffset: 10 }), true);
+  assert.equal(isSessionFirstRun({ sessionId: 'sid-1', docId: null, lastByteOffset: 10 }), true);
+  assert.equal(isSessionFirstRun({ sessionId: 'sid-1', docId: 'doc-1', lastByteOffset: 10 }), false);
 });

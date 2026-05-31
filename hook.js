@@ -345,6 +345,126 @@ function buildFinalAssistantMessage(lastAssistantMessage, normalizedMessages) {
 }
 
 /**
+ * Whether the session should still be treated as first run.
+ * A saved state without docId has not created the SiYuan document yet.
+ * @param {object|null} state
+ * @returns {boolean}
+ */
+function isSessionFirstRun(state) {
+  return !state || !state.docId;
+}
+
+/**
+ * Keep only non-empty text parts in a message.
+ * @param {object} msg
+ * @returns {object|null}
+ */
+function toTextOnlyMessage(msg) {
+  if (!msg || !Array.isArray(msg.parts)) return null;
+  const parts = msg.parts.filter((part) => part && part.type === 'text' && String(part.text || '').trim());
+  if (parts.length === 0) return null;
+  return { ...msg, parts };
+}
+
+/**
+ * Keep only the last assistant text part in a message.
+ * @param {object} msg
+ * @returns {object|null}
+ */
+function toLastAssistantTextMessage(msg) {
+  if (!msg || msg.role !== 'assistant' || !Array.isArray(msg.parts)) return null;
+  for (let i = msg.parts.length - 1; i >= 0; i -= 1) {
+    const part = msg.parts[i];
+    if (part && part.type === 'text' && String(part.text || '').trim()) {
+      return {
+        role: 'assistant',
+        timestamp: msg.timestamp || null,
+        parts: [{ type: 'text', text: String(part.text).trim() }],
+        turnId: msg.turnId || null,
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Build classic-mode turn-like segments from normalized messages.
+ * With turnId: segment by contiguous turnId.
+ * Without turnId: start a new segment when a new user message appears.
+ * @param {Array} normalizedMessages
+ * @returns {Array<Array>}
+ */
+function segmentMessagesForClassicMode(normalizedMessages) {
+  const segments = [];
+  let current = [];
+  let currentTurnId = null;
+
+  for (const msg of normalizedMessages || []) {
+    if (!msg || !msg.role || !Array.isArray(msg.parts)) continue;
+
+    if (msg.turnId) {
+      if (current.length > 0 && currentTurnId !== msg.turnId) {
+        segments.push(current);
+        current = [];
+      }
+      currentTurnId = msg.turnId;
+      current.push(msg);
+      continue;
+    }
+
+    if (currentTurnId) {
+      segments.push(current);
+      current = [];
+      currentTurnId = null;
+    }
+
+    if (msg.role === 'user' && current.length > 0) {
+      segments.push(current);
+      current = [];
+    }
+
+    current.push(msg);
+  }
+
+  if (current.length > 0) {
+    segments.push(current);
+  }
+
+  return segments;
+}
+
+/**
+ * Classic mode: keep user text and the last assistant text for each turn-like segment.
+ * @param {Array} normalizedMessages
+ * @returns {Array}
+ */
+function buildClassicModeMessages(normalizedMessages) {
+  const result = [];
+  const segments = segmentMessagesForClassicMode(normalizedMessages);
+
+  for (const segment of segments) {
+    const userMessages = segment
+      .filter((msg) => msg && msg.role === 'user')
+      .map(toTextOnlyMessage)
+      .filter(Boolean);
+
+    const assistantMessages = segment
+      .filter((msg) => msg && msg.role === 'assistant')
+      .map(toLastAssistantTextMessage)
+      .filter(Boolean);
+
+    result.push(...userMessages);
+
+    const lastAssistant = assistantMessages[assistantMessages.length - 1] || null;
+    if (lastAssistant) {
+      result.push(lastAssistant);
+    }
+  }
+
+  return result;
+}
+
+/**
  * Filter normalized messages based on sync content mode.
  * @param {Array} normalizedMessages
  * @param {string} syncMode - 'classic' | 'minimal' | 'full'
@@ -364,16 +484,7 @@ function filterMessagesBySyncMode(normalizedMessages, syncMode, lastAssistantMes
     return finalAssistant ? [finalAssistant] : [];
   }
 
-  // mode === 'classic': user messages + final assistant output
-  const userMessages = normalizedMessages
-    .filter(msg => msg && msg.role === 'user' && Array.isArray(msg.parts))
-    .map(msg => ({
-      ...msg,
-      parts: msg.parts.filter(p => p && p.type === 'text' && p.text && String(p.text).trim()),
-    }))
-    .filter(msg => msg.parts.length > 0);
-
-  return finalAssistant ? [...userMessages, finalAssistant] : userMessages;
+  return buildClassicModeMessages(normalizedMessages);
 }
 
 /**
@@ -469,7 +580,7 @@ async function main() {
 
   // 4. Load or initialize session state
   let state = loadState(sessionId);
-  const isFirstRun = !state;
+  const isFirstRun = isSessionFirstRun(state);
 
   if (isFirstRun) {
     state = {
@@ -583,9 +694,12 @@ if (require.main === module) {
 module.exports = {
   buildFallbackAssistantMessage,
   buildFinalAssistantMessage,
+  buildClassicModeMessages,
   filterMessagesBySyncMode,
+  isSessionFirstRun,
   shouldDeferFirstFallbackWrite,
   preserveStateForDeferredFirstWrite,
+  segmentMessagesForClassicMode,
   parsePatternLines,
   wildcardToRegExp,
   matchesAnyPattern,
