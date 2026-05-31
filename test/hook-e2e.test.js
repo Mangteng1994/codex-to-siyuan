@@ -484,36 +484,40 @@ test('createDocWithMd 非 path-exists 错误时不推进 state', async () => {
   }
 });
 
-test('debug log file records defer with message summaries', async () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hook-dlog-'));
-  const sessionId = `e2e-dlog-${Date.now()}-eee`;
+test('assistant-only first turn without last_assistant_message saves state without creating doc', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hook-nomsg-'));
+  const sessionId = `e2e-nomsg-${Date.now()}-eee`;
   const statePath = getStatePath(sessionId);
   const transcriptPath = path.join(tempDir, 'session.jsonl');
   const configPath = path.join(tempDir, 'config.json');
   const debugLogPath = path.join(os.tmpdir(), 'codex-to-siyuan-debug.log');
 
-  // Remove debug log if exists
   try { fs.rmSync(debugLogPath, { force: true }); } catch {}
-
-  // Use a fake server that tracks requests but doesn't need to respond for defer case
   const fake = await startFakeSiYuanMultiSession();
 
   try {
     fs.rmSync(statePath, { force: true });
     fs.writeFileSync(configPath, JSON.stringify({
-      notebook: 'notebook-dlog',
+      notebook: 'notebook-nomsg',
       siyuanUrl: fake.baseUrl,
-      siyuanToken: 'token-dlog',
+      siyuanToken: 'token-nomsg',
       syncMode: 'classic',
       parentPath: '/Codex Sessions',
       pathTemplate: '${parentPath}/${date}/${title}-${sessionIdShort}',
-      template: '## ${role} (${time})\n\n${content}\n\n---\n',
-      headerTemplate: '# ${projectName}\n\n---\n',
+      template: '## ${role} (${time})\
+\
+${content}\
+\
+---\
+',
+      headerTemplate: '# ${projectName}\
+\
+---\
+',
     }), 'utf8');
 
-    // Only assistant, no user → should trigger shouldDeferFirstFallbackWrite
     writeJsonl(transcriptPath, [
-      { type: 'turn_context', payload: { turn_id: 'turn-dlog-1' } },
+      { type: 'turn_context', payload: { turn_id: 'turn-nomsg-1' } },
       {
         timestamp: '2026-05-31T06:00:00.000Z',
         type: 'response_item',
@@ -529,20 +533,17 @@ test('debug log file records defer with message summaries', async () => {
     const r1 = await runHook({
       session_id: sessionId,
       transcript_path: transcriptPath,
-      cwd: 'C:\\demo',
+      cwd: 'C:\demo',
     }, env);
 
     assert.equal(r1.code, 0);
+    const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    assert.equal(state.docId || null, null);
 
-    // Debug log file should exist and contain defer info
     assert.equal(fs.existsSync(debugLogPath), true, 'Debug log file should exist');
     const debugContent = fs.readFileSync(debugLogPath, 'utf8');
     assert.match(debugContent, /hook entry: sessionId=/);
-    assert.match(debugContent, /state loaded: isFirstRun=true/);
-    // Single assistant-only message triggers shouldDeferFirstFallbackWrite, not hasLeadingAssistantOnlySegment
-    assert.match(debugContent, /defer \(normalized\): no user text parsed/);
-    assert.match(debugContent, /deferred normalized message\[0\]: role=assistant/);
-    assert.match(debugContent, /自动回复/);
+    assert.match(debugContent, /filteredMessages=0/);
   } finally {
     await new Promise(resolve => fake.server.close(resolve));
     fs.rmSync(statePath, { force: true });
@@ -551,43 +552,44 @@ test('debug log file records defer with message summaries', async () => {
   }
 });
 
-test('debug log file records createDocWithMd flow', async () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hook-dlog2-'));
-  const sessionId = `e2e-dlog2-${Date.now()}-fff`;
+test('assistant-only first turn WITH last_assistant_message creates doc via fallback', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hook-fbmsg-'));
+  const sessionId = `e2e-fbmsg-${Date.now()}-fff`;
   const statePath = getStatePath(sessionId);
   const transcriptPath = path.join(tempDir, 'session.jsonl');
   const configPath = path.join(tempDir, 'config.json');
   const debugLogPath = path.join(os.tmpdir(), 'codex-to-siyuan-debug.log');
-  const fake = await startFakeSiYuanMultiSession();
 
-  // Remove debug log if exists
   try { fs.rmSync(debugLogPath, { force: true }); } catch {}
+  const fake = await startFakeSiYuanMultiSession();
 
   try {
     fs.rmSync(statePath, { force: true });
     fs.writeFileSync(configPath, JSON.stringify({
-      notebook: 'notebook-dlog2',
+      notebook: 'notebook-fbmsg',
       siyuanUrl: fake.baseUrl,
-      siyuanToken: 'token-dlog2',
+      siyuanToken: 'token-fbmsg',
       syncMode: 'classic',
       parentPath: '/Codex Sessions',
       pathTemplate: '${parentPath}/${date}/${title}-${sessionIdShort}',
-      template: '## ${role} (${time})\n\n${content}\n\n---\n',
-      headerTemplate: '# ${projectName}\n\n---\n',
+      template: '## ${role} (${time})\
+\
+${content}\
+\
+---\
+',
+      headerTemplate: '# ${projectName}\
+\
+---\
+',
     }), 'utf8');
 
-    // User + assistant in a single turn → creates doc
     writeJsonl(transcriptPath, [
-      { type: 'turn_context', payload: { turn_id: 'turn-dlog2-1' } },
+      { type: 'turn_context', payload: { turn_id: 'turn-fbmsg-1' } },
       {
         timestamp: '2026-05-31T07:00:00.000Z',
-        type: 'event_msg',
-        payload: { type: 'user_message', message: '<environment_context><cwd>C:\\demo</cwd></environment_context>\n\n你好' },
-      },
-      {
-        timestamp: '2026-05-31T07:00:01.000Z',
         type: 'response_item',
-        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '回复' }] },
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'auto reply' }] },
       },
     ]);
 
@@ -596,26 +598,17 @@ test('debug log file records createDocWithMd flow', async () => {
       CODEX_TO_SIYUAN_DEBUG: '1',
     };
 
-    const result = await runHook({
+    const r1 = await runHook({
       session_id: sessionId,
       transcript_path: transcriptPath,
-      cwd: 'C:\\demo',
+      cwd: 'C:\demo',
+      last_assistant_message: 'hello from fallback',
     }, env);
 
-    assert.equal(result.code, 0);
-
-    // Debug log should exist and contain createDocWithMd entries
-    assert.equal(fs.existsSync(debugLogPath), true, 'Debug log file should exist');
-    const debugContent = fs.readFileSync(debugLogPath, 'utf8');
-    assert.match(debugContent, /hook entry: sessionId=/);
-    assert.match(debugContent, /state loaded: isFirstRun=true/);
-    assert.match(debugContent, /createDocWithMd attempt: docPath=/);
-    assert.match(debugContent, /createDocWithMd success: docId=/);
-    assert.match(debugContent, /你好/);
-
-    // Verify request was made
+    assert.equal(r1.code, 0);
     assert.equal(fake.requests.length >= 1, true);
     assert.equal(fake.requests[0].url, '/api/filetree/createDocWithMd');
+    assert.match(fake.requests[0].body.markdown, /hello from fallback/);
   } finally {
     await new Promise(resolve => fake.server.close(resolve));
     fs.rmSync(statePath, { force: true });
@@ -623,3 +616,4 @@ test('debug log file records createDocWithMd flow', async () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
+

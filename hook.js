@@ -703,19 +703,11 @@ async function main() {
     const fallbackMessage = buildFallbackAssistantMessage(lastAssistantMessage);
     state.lastByteOffset = newByteOffset;
 
-    if (!fallbackMessage) {
-      if (shouldDeferFirstFallbackWrite({ isFirstRun, syncMode, normalizedMessages: [] })) {
-        debugLog('defer because no user text parsed');
-        debugLogFile('defer (fallback empty): no user text parsed, messages array empty');
-        process.stderr.write('[codex-to-siyuan] defer (fallback empty): no messages and no fallback, will retry next turn\n');
-        state = preserveStateForDeferredFirstWrite(state, previousByteOffset);
-      }
-      // Nothing new — update offset and exit
+        if (!fallbackMessage) {
+      // Nothing new -- update offset and exit
       saveState(sessionId, state);
       return;
-    }
-
-    const fallbackHash = hashContent(lastAssistantMessage);
+    }ackHash = hashContent(lastAssistantMessage);
     if (fallbackHash && state.lastFallbackHash === fallbackHash) {
       saveState(sessionId, state);
       return;
@@ -733,35 +725,27 @@ async function main() {
   debugLogFile(`hook summary normalized: normalizedMessages=${messages.length}`);
   debugMessageList('normalized message', messages);
 
-  const mode = ['classic', 'minimal', 'full'].includes(syncMode) ? syncMode : 'classic';
-  if (isFirstRun && mode === 'classic' && hasLeadingAssistantOnlySegment(messages)) {
-    debugLog('leading assistant-only segment discarded; defer and keep offset');
-    debugLogFile('defer (leading assistant-only segment): discarding and keeping offset');
-    debugMessageListFile('deferred normalized message', messages);
-    state = preserveStateForDeferredFirstWrite(state, previousByteOffset);
-    saveState(sessionId, state);
-    return;
-  }
-
-  if (shouldDeferFirstFallbackWrite({ isFirstRun, syncMode, normalizedMessages: messages })) {
-    debugLog('defer because no user text parsed');
-    debugLogFile('defer (normalized): no user text parsed');
-    debugMessageListFile('deferred normalized message', messages);
-    process.stderr.write(`[codex-to-siyuan] defer (normalized): ${messages.length} messages but no user text — will retry next turn
-`);
-    state = preserveStateForDeferredFirstWrite(state, previousByteOffset);
-    saveState(sessionId, state);
-    return;
-  }
-  messages = filterMessagesBySyncMode(messages, syncMode, lastAssistantMessage);
+    const mode = ['classic', 'minimal', 'full'].includes(syncMode) ? syncMode : 'classic';
+  messages = filterMessagesBySyncMode(messages, syncMode, lastAssistantMessage);messages = filterMessagesBySyncMode(messages, syncMode, lastAssistantMessage);
   debugLog(`hook summary filtered: syncMode=${syncMode}, filteredMessages=${messages.length}`);
   debugLogFile(`hook summary filtered: syncMode=${syncMode}, filteredMessages=${messages.length}`);
   debugMessageList('filtered message', messages);
 
   if (messages.length === 0) {
-    process.stderr.write('[codex-to-siyuan] all messages filtered out after sync mode filter -- nothing to write\n');
-    saveState(sessionId, state);
-    return;
+    // Use last_assistant_message as fallback when filtering removed everything
+    const fallbackMessage = buildFallbackAssistantMessage(lastAssistantMessage);
+    if (fallbackMessage) {
+      const fallbackHash = hashContent(lastAssistantMessage);
+      if (fallbackHash && state.lastFallbackHash === fallbackHash) {
+        saveState(sessionId, state);
+        return;
+      }
+      state.lastFallbackHash = fallbackHash;
+      messages = [fallbackMessage];
+    } else {
+      saveState(sessionId, state);
+      return;
+    }
   }
 
   // 6. Format messages
