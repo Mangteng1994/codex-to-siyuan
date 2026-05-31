@@ -261,6 +261,59 @@ test('classic mode regression: first two turns with duplicate mirrored user entr
   assert.match(markdown, /嘻嘻[\s\S]*嘻嘻。有何欲修此插件，直言即可。[\s\S]*嘻嘻 不嘻嘻[\s\S]*然则不嘻嘻……/);
 });
 
+test('classic mode parses first turn user from non-response_item structure', () => {
+  const filePath = writeJsonl([
+    { type: 'turn_context', payload: { turn_id: 'turn-real-1' } },
+    {
+      timestamp: '2026-05-31T02:00:00.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'user_message',
+        text: '<environment_context><cwd>C:\\\\demo</cwd></environment_context>\n\n你好',
+      },
+    },
+    {
+      timestamp: '2026-05-31T02:00:01.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: '第一轮回复' }],
+      },
+    },
+    { type: 'turn_context', payload: { turn_id: 'turn-real-2' } },
+    {
+      timestamp: '2026-05-31T02:01:00.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: '你好' }],
+      },
+    },
+    {
+      timestamp: '2026-05-31T02:01:01.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: '第二轮回复' }],
+      },
+    },
+  ]);
+
+  const { messages } = parseTranscript(filePath, 0);
+  const normalized = normalizeMessages(messages);
+  const filtered = filterMessagesBySyncMode(normalized, 'classic', null);
+
+  assert.deepEqual(filtered.map((msg) => [msg.role, msg.parts[0].text]), [
+    ['user', '你好'],
+    ['assistant', '第一轮回复'],
+    ['user', '你好'],
+    ['assistant', '第二轮回复'],
+  ]);
+});
+
 // ── Minimal mode ──────────────────────────────────────────────────
 
 test('minimal mode returns only final assistant output (with last_assistant_message)', () => {

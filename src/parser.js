@@ -51,7 +51,6 @@ function parseTranscript(filePath, byteOffset = 0) {
 
       const msg = parseEntry(entry, currentTurnId);
       if (msg) messages.push(msg);
-      else debugEntryContaining(entry, '嘻嘻');
     } catch (e) {
       debugSkip('malformed_json', null, null, e.message);
       // Skip malformed lines silently
@@ -73,6 +72,11 @@ function parseTranscript(filePath, byteOffset = 0) {
 function parseEntry(entry, turnId = null) {
   if (entry.type === 'user' || entry.type === 'assistant') {
     return parseMessage(entry, turnId);
+  }
+
+  const explicitUserMessage = parseExplicitUserEntry(entry, turnId);
+  if (explicitUserMessage) {
+    return explicitUserMessage;
   }
 
   const codexMessage = parseCodexEntry(entry, turnId);
@@ -100,7 +104,72 @@ function parseMessage(entry, turnId = null) {
   if (parts.length === 0) return null;
   debugParsedMessage(entry, role, entry.turn_id || turnId || null, parts, extracted.source);
 
-  return { role, timestamp, parts, turnId: entry.turn_id || turnId || null };
+  return { role, timestamp, parts, turnId: entry.turn_id || turnId || null, source: extracted.source };
+}
+
+/**
+ * Parse explicit non-response_item user message structures observed in Codex transcripts.
+ * @param {object} entry
+ * @param {string|null} [turnId]
+ * @returns {object|null}
+ */
+function parseExplicitUserEntry(entry, turnId = null) {
+  const payload = entry && entry.payload && typeof entry.payload === 'object' ? entry.payload : {};
+  const timestamp = entry && entry.timestamp || null;
+  const resolvedTurnId = getTurnId(entry) || turnId || null;
+  const entryType = String(entry && entry.type || '').toLowerCase();
+  const payloadType = String(payload && payload.type || '').toLowerCase();
+
+  if (entryType === 'turn_input') {
+    return buildExplicitUserMessage(entry, timestamp, resolvedTurnId, [
+      ['entry.input', entry && entry.input],
+      ['entry.content', entry && entry.content],
+      ['entry.text', entry && entry.text],
+      ['entry.message.content', entry && entry.message && entry.message.content],
+      ['entry.message', entry && entry.message],
+    ]);
+  }
+
+  if (entryType === 'user_message') {
+    return buildExplicitUserMessage(entry, timestamp, resolvedTurnId, [
+      ['entry.message.content', entry && entry.message && entry.message.content],
+      ['entry.message', entry && entry.message],
+      ['entry.text', entry && entry.text],
+      ['entry.input', entry && entry.input],
+      ['entry.content', entry && entry.content],
+    ]);
+  }
+
+  if ((entryType === 'event_msg' || entryType === 'codex_event') && payloadType === 'user_message') {
+    return buildExplicitUserMessage(entry, timestamp, resolvedTurnId, [
+      ['payload.message.content', payload && payload.message && payload.message.content],
+      ['payload.message', payload && payload.message],
+      ['payload.text', payload && payload.text],
+      ['payload.input', payload && payload.input],
+      ['payload.content', payload && payload.content],
+    ]);
+  }
+
+  return null;
+}
+
+/**
+ * Build explicit user message from prioritized sources.
+ * @param {object} entry
+ * @param {string|null} timestamp
+ * @param {string|null} turnId
+ * @param {Array<[string, *]>} sources
+ * @returns {object|null}
+ */
+function buildExplicitUserMessage(entry, timestamp, turnId, sources) {
+  for (const [source, value] of sources) {
+    const parts = extractTextPartsFromValue(value);
+    if (parts.length > 0) {
+      debugParsedMessage(entry, 'user', turnId, parts, source);
+      return { role: 'user', timestamp, parts, turnId, source };
+    }
+  }
+  return null;
 }
 
 /**
@@ -121,7 +190,6 @@ function parseCodexEntry(entry, turnId = null) {
   if (payload.type === 'message' && (payload.role === 'user' || payload.role === 'assistant')) {
     const msg = parseCodexMessage(payload.role, timestamp, payload.content, resolvedTurnId, 'payload.content', entry);
     if (msg) return msg;
-    debugEntryContaining(entry, '嘻嘻');
     return null;
   }
 
@@ -134,6 +202,7 @@ function parseCodexEntry(entry, turnId = null) {
         timestamp,
         parts: extracted.parts,
         turnId: resolvedTurnId,
+        source: extracted.source,
       };
     }
   }
@@ -150,11 +219,14 @@ function parseCodexEntry(entry, turnId = null) {
 
   const text = extractCodexReadableText(payload);
   if (text) {
+    const parts = [{ type: 'text', text }];
+    debugParsedMessage(entry, 'assistant', resolvedTurnId, parts, 'payload.text|payload.content|payload.summary');
     return {
       role: 'assistant',
       timestamp,
-      parts: [{ type: 'text', text }],
+      parts,
       turnId: resolvedTurnId,
+      source: 'payload.text|payload.content|payload.summary',
     };
   }
 
@@ -180,7 +252,7 @@ function parseCodexMessage(role, timestamp, rawContent, turnId = null, source = 
   if (parts.length === 0) return null;
   debugParsedMessage(entry, role, turnId, parts, source);
 
-  return { role, timestamp, parts, turnId };
+  return { role, timestamp, parts, turnId, source };
 }
 
 /**
@@ -469,6 +541,7 @@ function copyMessage(message) {
     timestamp: message.timestamp || null,
     parts: message.parts.slice(),
     turnId: message.turnId || null,
+    source: message.source || null,
   };
 }
 
@@ -600,9 +673,11 @@ function debugSkip(entryType, payloadType, payloadRole, reason, entry) {
   if (process.env.CODEX_TO_SIYUAN_DEBUG !== '1') return;
   const payload = entry && entry.payload && typeof entry.payload === 'object' ? entry.payload : {};
   const item = entry && entry.item && typeof entry.item === 'object' ? entry.item : {};
-  const matches = findTextMatches(entry, '嘻嘻');
+  const needle = getDebugNeedle();
+  const matches = needle ? findTextMatches(entry, needle) : [];
+  const suspicious = needle ? [] : findSuspiciousTextFields(entry);
   process.stderr.write(
-    `[codex-to-siyuan] skipped transcript entry: entry.type=${entryType || ''}, payload.type=${payloadType || ''}, payload.role=${payloadRole || ''}, entry.keys=${listKeys(entry)}, payload.keys=${listKeys(payload)}, item.keys=${listKeys(item)}, matches=${matches.join('|')}, reason=${reason}\n`
+    `[codex-to-siyuan] skipped transcript entry: entry.type=${entryType || ''}, payload.type=${payloadType || ''}, payload.role=${payloadRole || ''}, entry.keys=${listKeys(entry)}, payload.keys=${listKeys(payload)}, item.keys=${listKeys(item)}, needle=${needle || ''}, matches=${matches.join('|')}, suspicious=${suspicious.join('|')}, reason=${reason}\n`
   );
 }
 
@@ -629,19 +704,11 @@ function debugParsedMessage(entry, role, turnId, parts, source) {
 }
 
 /**
- * Log skipped entries containing needle in debug mode.
- * @param {object} entry
- * @param {string} needle
+ * Get optional debug needle.
+ * @returns {string}
  */
-function debugEntryContaining(entry, needle) {
-  if (process.env.CODEX_TO_SIYUAN_DEBUG !== '1') return;
-  const matches = findTextMatches(entry, needle);
-  if (matches.length === 0) return;
-  const payload = entry && entry.payload && typeof entry.payload === 'object' ? entry.payload : {};
-  const item = entry && entry.item && typeof entry.item === 'object' ? entry.item : {};
-  process.stderr.write(
-    `[codex-to-siyuan] skipped entry contains ${needle}: entry.type=${entry?.type || ''}, payload.type=${payload.type || ''}, payload.role=${payload.role || ''}, item.type=${item.type || ''}, entry.keys=${listKeys(entry)}, payload.keys=${listKeys(payload)}, item.keys=${listKeys(item)}, matches=${matches.join('|')}\n`
-  );
+function getDebugNeedle() {
+  return String(process.env.CODEX_TO_SIYUAN_DEBUG_NEEDLE || '').trim();
 }
 
 /**
@@ -663,6 +730,35 @@ function findTextMatches(value, needle, path = 'entry', depth = 0) {
   if (typeof value === 'object') {
     return Object.keys(value).flatMap((key) => findTextMatches(value[key], needle, `${path}.${key}`, depth + 1));
   }
+  return [];
+}
+
+/**
+ * Find suspicious text-bearing fields for skipped-entry debug output.
+ * @param {*} value
+ * @param {string} [path]
+ * @param {number} [depth]
+ * @returns {Array<string>}
+ */
+function findSuspiciousTextFields(value, path = 'entry', depth = 0) {
+  if (!value || depth > 5) return [];
+
+  if (typeof value === 'string') {
+    const leaf = path.split('.').pop() || '';
+    if (/^(text|content|input|message|prompt)$/i.test(leaf)) {
+      return [`${path}=${JSON.stringify(value.slice(0, 80))}`];
+    }
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) => findSuspiciousTextFields(item, `${path}[${index}]`, depth + 1));
+  }
+
+  if (typeof value === 'object') {
+    return Object.keys(value).flatMap((key) => findSuspiciousTextFields(value[key], `${path}.${key}`, depth + 1));
+  }
+
   return [];
 }
 

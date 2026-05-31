@@ -5,6 +5,7 @@ const {
   shouldSyncProject,
   filterMessages,
   renderPathTemplate,
+  hasLeadingAssistantOnlySegment,
   isSessionFirstRun,
   shouldDeferFirstFallbackWrite,
   preserveStateForDeferredFirstWrite,
@@ -150,4 +151,17 @@ test('只要 docId 为空，已保存 state 的 session 下次仍视为首轮', 
   assert.equal(isSessionFirstRun({ sessionId: 'sid-1', lastByteOffset: 10 }), true);
   assert.equal(isSessionFirstRun({ sessionId: 'sid-1', docId: null, lastByteOffset: 10 }), true);
   assert.equal(isSessionFirstRun({ sessionId: 'sid-1', docId: 'doc-1', lastByteOffset: 10 }), false);
+});
+
+test('首轮 classic 如果前导 assistant-only 后面才有 user，应识别为不能推进 offset', () => {
+  assert.equal(hasLeadingAssistantOnlySegment([
+    { role: 'assistant', turnId: 'turn-1', parts: [{ type: 'text', text: '第一轮回复' }] },
+    { role: 'user', turnId: 'turn-2', parts: [{ type: 'text', text: '你好' }] },
+    { role: 'assistant', turnId: 'turn-2', parts: [{ type: 'text', text: '第二轮回复' }] },
+  ]), true);
+
+  assert.equal(hasLeadingAssistantOnlySegment([
+    { role: 'user', turnId: 'turn-1', parts: [{ type: 'text', text: '你好' }] },
+    { role: 'assistant', turnId: 'turn-1', parts: [{ type: 'text', text: '第一轮回复' }] },
+  ]), false);
 });

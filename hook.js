@@ -507,14 +507,38 @@ function shouldDeferFirstFallbackWrite({ isFirstRun, syncMode, normalizedMessage
   const mode = ['classic', 'minimal', 'full'].includes(syncMode) ? syncMode : 'classic';
   if (mode === 'minimal') return false;
 
-  const hasUserText = Array.isArray(normalizedMessages) && normalizedMessages.some((msg) =>
+  return !hasUserTextMessage(normalizedMessages);
+}
+
+/**
+ * Whether messages contain at least one user text part.
+ * @param {Array} messages
+ * @returns {boolean}
+ */
+function hasUserTextMessage(messages) {
+  return Array.isArray(messages) && messages.some((msg) =>
     msg
     && msg.role === 'user'
     && Array.isArray(msg.parts)
     && msg.parts.some((part) => part && part.type === 'text' && String(part.text || '').trim())
   );
+}
 
-  return !hasUserText;
+/**
+ * Whether classic mode would discard a leading assistant-only segment before later user text.
+ * @param {Array} normalizedMessages
+ * @returns {boolean}
+ */
+function hasLeadingAssistantOnlySegment(normalizedMessages) {
+  const segments = segmentMessagesForClassicMode(normalizedMessages);
+  if (segments.length < 2) return false;
+
+  const first = segments[0] || [];
+  const firstHasAssistant = first.some((msg) => msg && msg.role === 'assistant');
+  const firstHasUser = first.some((msg) => msg && msg.role === 'user');
+  const laterHasUser = segments.slice(1).some((segment) => segment.some((msg) => msg && msg.role === 'user'));
+
+  return firstHasAssistant && !firstHasUser && laterHasUser;
 }
 
 /**
@@ -529,6 +553,25 @@ function preserveStateForDeferredFirstWrite(state, previousByteOffset) {
     ...state,
     lastByteOffset: Number.isFinite(previousByteOffset) ? previousByteOffset : 0,
   };
+}
+
+/**
+ * Log message summary when debug mode is enabled.
+ * @param {string} label
+ * @param {Array} messages
+ */
+function debugMessageList(label, messages) {
+  if (process.env.CODEX_TO_SIYUAN_DEBUG !== '1') return;
+  (messages || []).forEach((msg, index) => {
+    const text = Array.isArray(msg.parts)
+      ? msg.parts
+        .filter((part) => part && part.type === 'text')
+        .map((part) => String(part.text || ''))
+        .join('\n')
+        .slice(0, 80)
+      : '';
+    debugLog(`${label}[${index}]: role=${msg?.role || ''}, turnId=${msg?.turnId || ''}, source=${msg?.source || ''}, text=${JSON.stringify(text)}`);
+  });
 }
 
 async function main() {
@@ -597,20 +640,29 @@ async function main() {
 
   // 5. Parse transcript from last offset
   let messages = [];
+  let rawParsedMessages = [];
   const previousByteOffset = state.lastByteOffset;
   let newByteOffset = state.lastByteOffset;
 
   if (transcriptPath && fs.existsSync(transcriptPath)) {
     const result = parseTranscript(transcriptPath, state.lastByteOffset);
     messages = result.messages;
+    rawParsedMessages = result.messages.slice();
     newByteOffset = result.newByteOffset;
   }
+
+  debugLog(`hook summary start: sessionId=${sessionId}, transcriptPath=${transcriptPath || ''}, previousByteOffset=${previousByteOffset}, newByteOffset=${newByteOffset}, rawParsedMessages=${rawParsedMessages.length}`);
+  debugMessageList('raw parsed message', rawParsedMessages);
 
   if (messages.length === 0) {
     const fallbackMessage = buildFallbackAssistantMessage(lastAssistantMessage);
     state.lastByteOffset = newByteOffset;
 
     if (!fallbackMessage) {
+      if (shouldDeferFirstFallbackWrite({ isFirstRun, syncMode, normalizedMessages: [] })) {
+        debugLog('defer because no user text parsed');
+        state = preserveStateForDeferredFirstWrite(state, previousByteOffset);
+      }
       // Nothing new — update offset and exit
       saveState(sessionId, state);
       return;
@@ -630,12 +682,26 @@ async function main() {
 
   messages = normalizeMessages(messages);
   messages = filterMessages(messages, config);
+  debugLog(`hook summary normalized: normalizedMessages=${messages.length}`);
+  debugMessageList('normalized message', messages);
+
+  const mode = ['classic', 'minimal', 'full'].includes(syncMode) ? syncMode : 'classic';
+  if (isFirstRun && mode === 'classic' && hasLeadingAssistantOnlySegment(messages)) {
+    debugLog('leading assistant-only segment discarded; defer and keep offset');
+    state = preserveStateForDeferredFirstWrite(state, previousByteOffset);
+    saveState(sessionId, state);
+    return;
+  }
+
   if (shouldDeferFirstFallbackWrite({ isFirstRun, syncMode, normalizedMessages: messages })) {
+    debugLog('defer because no user text parsed');
     state = preserveStateForDeferredFirstWrite(state, previousByteOffset);
     saveState(sessionId, state);
     return;
   }
   messages = filterMessagesBySyncMode(messages, syncMode, lastAssistantMessage);
+  debugLog(`hook summary filtered: syncMode=${syncMode}, filteredMessages=${messages.length}`);
+  debugMessageList('filtered message', messages);
 
   if (messages.length === 0) {
     saveState(sessionId, state);
@@ -700,6 +766,7 @@ module.exports = {
   buildFinalAssistantMessage,
   buildClassicModeMessages,
   filterMessagesBySyncMode,
+  hasLeadingAssistantOnlySegment,
   isSessionFirstRun,
   shouldDeferFirstFallbackWrite,
   preserveStateForDeferredFirstWrite,

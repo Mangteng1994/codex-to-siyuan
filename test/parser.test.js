@@ -27,6 +27,32 @@ function writeJsonl(entries) {
   return filePath;
 }
 
+function captureStderr(fn) {
+  const originalWrite = process.stderr.write;
+  let output = '';
+  process.stderr.write = (chunk, encoding, callback) => {
+    output += String(chunk);
+    if (typeof callback === 'function') callback();
+    return true;
+  };
+
+  try {
+    fn();
+  } finally {
+    process.stderr.write = originalWrite;
+  }
+
+  return output;
+}
+
+function restoreEnv(name, value) {
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
+}
+
 test('Claude-style user and assistant transcript still parses', () => {
   const filePath = writeJsonl([
     { timestamp: '2026-05-29T01:00:00.000Z', type: 'user', message: { content: 'hello' } },
@@ -215,6 +241,125 @@ test('user-like event type is not misclassified as formal user message', () => {
   const { messages } = parseTranscript(filePath, 0);
 
   assert.equal(messages.length, 0);
+});
+
+test('debug skipped entry uses CODEX_TO_SIYUAN_DEBUG_NEEDLE instead of hardcoded text', () => {
+  const filePath = writeJsonl([
+    {
+      timestamp: '2026-05-29T01:00:00.000Z',
+      type: 'metadata',
+      payload: { type: 'cache', role: 'system', message: '你好' },
+    },
+  ]);
+  const originalDebug = process.env.CODEX_TO_SIYUAN_DEBUG;
+  const originalNeedle = process.env.CODEX_TO_SIYUAN_DEBUG_NEEDLE;
+
+  process.env.CODEX_TO_SIYUAN_DEBUG = '1';
+  process.env.CODEX_TO_SIYUAN_DEBUG_NEEDLE = '你好';
+  let stderr = '';
+  try {
+    stderr = captureStderr(() => parseTranscript(filePath, 0));
+  } finally {
+    restoreEnv('CODEX_TO_SIYUAN_DEBUG', originalDebug);
+    restoreEnv('CODEX_TO_SIYUAN_DEBUG_NEEDLE', originalNeedle);
+  }
+
+  assert.match(stderr, /skipped transcript entry/);
+  assert.match(stderr, /entry\.type=metadata/);
+  assert.match(stderr, /payload\.type=cache/);
+  assert.match(stderr, /payload\.role=system/);
+  assert.match(stderr, /needle=你好/);
+  assert.match(stderr, /matches=entry\.payload\.message/);
+  assert.equal(stderr.includes('嘻嘻'), false);
+});
+
+test('debug skipped entry without needle prints suspicious text fields', () => {
+  const filePath = writeJsonl([
+    {
+      timestamp: '2026-05-29T01:00:00.000Z',
+      type: 'metadata',
+      payload: { type: 'cache', content: '可疑文本' },
+    },
+  ]);
+  const originalDebug = process.env.CODEX_TO_SIYUAN_DEBUG;
+  const originalNeedle = process.env.CODEX_TO_SIYUAN_DEBUG_NEEDLE;
+
+  process.env.CODEX_TO_SIYUAN_DEBUG = '1';
+  delete process.env.CODEX_TO_SIYUAN_DEBUG_NEEDLE;
+  let stderr = '';
+  try {
+    stderr = captureStderr(() => parseTranscript(filePath, 0));
+  } finally {
+    restoreEnv('CODEX_TO_SIYUAN_DEBUG', originalDebug);
+    restoreEnv('CODEX_TO_SIYUAN_DEBUG_NEEDLE', originalNeedle);
+  }
+
+  assert.match(stderr, /skipped transcript entry/);
+  assert.match(stderr, /entry\.keys=timestamp\|type\|payload/);
+  assert.match(stderr, /payload\.keys=type\|content/);
+  assert.match(stderr, /suspicious=entry\.payload\.content="可疑文本"/);
+});
+
+test('event_msg user_message parses first-turn user text', () => {
+  const filePath = writeJsonl([
+    { type: 'turn_context', payload: { turn_id: 'turn-event-1' } },
+    {
+      timestamp: '2026-05-29T01:00:00.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'user_message',
+        text: '<environment_context><cwd>C:\\\\demo</cwd></environment_context>\n\n你好',
+      },
+    },
+  ]);
+
+  const { messages } = parseTranscript(filePath, 0);
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].role, 'user');
+  assert.equal(messages[0].turnId, 'turn-event-1');
+  assert.equal(messages[0].source, 'payload.text');
+  assert.equal(messages[0].parts[0].text, '你好');
+});
+
+test('codex_event user_message parses payload.message content', () => {
+  const filePath = writeJsonl([
+    { type: 'turn_context', payload: { turn_id: 'turn-event-2' } },
+    {
+      timestamp: '2026-05-29T01:00:00.000Z',
+      type: 'codex_event',
+      payload: {
+        type: 'user_message',
+        message: {
+          content: [{ type: 'input_text', text: '你号码' }],
+        },
+      },
+    },
+  ]);
+
+  const { messages } = parseTranscript(filePath, 0);
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].role, 'user');
+  assert.equal(messages[0].parts[0].text, '你号码');
+});
+
+test('direct turn_input entry parses first-turn user text', () => {
+  const filePath = writeJsonl([
+    {
+      timestamp: '2026-05-29T01:00:00.000Z',
+      type: 'turn_input',
+      turn_id: 'turn-direct-1',
+      input: '你好',
+    },
+  ]);
+
+  const { messages } = parseTranscript(filePath, 0);
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].role, 'user');
+  assert.equal(messages[0].turnId, 'turn-direct-1');
+  assert.equal(messages[0].parts[0].text, '你好');
 });
 
 test('same turn duplicate user text is deduped during normalization', () => {
