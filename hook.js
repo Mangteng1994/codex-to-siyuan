@@ -14,12 +14,19 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const { parseTranscript, normalizeMessages } = require('./src/parser');
-const { formatMessages, generateDocHeader, formatDate } = require('./src/formatter');
+const {
+  formatMessages,
+  generateDocHeader,
+  formatDate,
+  renderTemplate,
+  sanitizePathSegment,
+} = require('./src/formatter');
 const SiYuanAPI = require('./src/siyuan-api');
 const { loadState, saveState, cleanupStaleStates } = require('./src/state');
 
 // ── Symlink-safe path resolution ──────────────────────────────────
-const SCRIPT_DIR = path.dirname(process.argv[1] || __filename);
+const SCRIPT_PATH = fs.realpathSync(process.argv[1] || __filename);
+const SCRIPT_DIR = path.dirname(SCRIPT_PATH);
 
 // ── Stdin reading with 10s timeout guard ──────────────────────────
 const STDIN_TIMEOUT_MS = 10000;
@@ -82,6 +89,7 @@ function loadConfig() {
 const DEFAULT_TEMPLATE = '## ${role} (${time})\n\n${content}\n\n---\n';
 const DEFAULT_HEADER_TEMPLATE =
   '# ${projectName}\n\n- 项目: ${projectName}\n- 开始时间: ${date} ${time}\n- Session ID: ${sessionId}\n\n---\n';
+const DEFAULT_PATH_TEMPLATE = '${parentPath}/${date}/${title}';
 
 // ── SiYuan API token loading ──────────────────────────────────────
 
@@ -123,6 +131,154 @@ function getSiYuanToken() {
   }
 
   return '';
+}
+
+/**
+ * Write debug log only when enabled.
+ * @param {string} message
+ */
+function debugLog(message) {
+  if (process.env.CODEX_TO_SIYUAN_DEBUG !== '1') return;
+  process.stderr.write(`[codex-to-siyuan] ${message}\n`);
+}
+
+/**
+ * Normalize a path or string for pattern matching.
+ * @param {string} value
+ * @returns {string}
+ */
+function normalizeMatchValue(value) {
+  return String(value || '').replace(/\\/g, '/');
+}
+
+/**
+ * Parse multi-line pattern settings into rule array.
+ * @param {string|Array|null|undefined} value
+ * @returns {Array<string>}
+ */
+function parsePatternLines(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map(item => String(item || '').trim())
+      .filter(Boolean);
+  }
+
+  return String(value || '')
+    .split(/\r?\n/g)
+    .map(line => line.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Convert wildcard pattern to RegExp.
+ * @param {string} pattern
+ * @returns {RegExp}
+ */
+function wildcardToRegExp(pattern) {
+  const escaped = String(pattern || '')
+    .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*/g, '.*');
+  return new RegExp(`^${escaped}$`);
+}
+
+/**
+ * Check whether a value matches any configured pattern.
+ * Plain patterns use substring match; patterns with * use wildcard match.
+ * @param {string} value
+ * @param {Array<string>} patterns
+ * @returns {boolean}
+ */
+function matchesAnyPattern(value, patterns) {
+  const target = normalizeMatchValue(value);
+  if (!target || !Array.isArray(patterns) || patterns.length === 0) {
+    return false;
+  }
+
+  for (const pattern of patterns) {
+    const rule = String(pattern || '').trim();
+    if (!rule) continue;
+
+    try {
+      if (rule.includes('*')) {
+        if (wildcardToRegExp(normalizeMatchValue(rule)).test(target)) {
+          return true;
+        }
+      } else if (target.includes(normalizeMatchValue(rule))) {
+        return true;
+      }
+    } catch (_) {
+      debugLog(`invalid pattern skipped: ${rule}`);
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Determine whether current project should sync.
+ * @param {string} cwd
+ * @param {object} config
+ * @returns {boolean}
+ */
+function shouldSyncProject(cwd, config) {
+  const normalizedCwd = normalizeMatchValue(cwd);
+  const includePatterns = parsePatternLines(config && config.includeProjectPatterns);
+  const excludePatterns = parsePatternLines(config && config.excludeProjectPatterns);
+
+  if (matchesAnyPattern(normalizedCwd, excludePatterns)) {
+    debugLog(`skip sync for project by excludeProjectPatterns: ${normalizedCwd}`);
+    return false;
+  }
+
+  if (includePatterns.length === 0) {
+    return true;
+  }
+
+  const matched = matchesAnyPattern(normalizedCwd, includePatterns);
+  if (!matched) {
+    debugLog(`skip sync for project not matched by includeProjectPatterns: ${normalizedCwd}`);
+  }
+  return matched;
+}
+
+/**
+ * Filter message parts by excludeContentPatterns.
+ * @param {Array} messages
+ * @param {object} config
+ * @returns {Array}
+ */
+function filterMessages(messages, config) {
+  const patterns = parsePatternLines(config && config.excludeContentPatterns);
+  if (patterns.length === 0) {
+    return messages;
+  }
+
+  return messages
+    .map((message) => {
+      const parts = Array.isArray(message.parts) ? message.parts.filter((part) => {
+        const text = part && part.text ? String(part.text) : '';
+        const input = part && part.input ? String(part.input) : '';
+        return !matchesAnyPattern(text, patterns) && !matchesAnyPattern(input, patterns);
+      }) : [];
+
+      return { ...message, parts };
+    })
+    .filter(message => Array.isArray(message.parts) && message.parts.length > 0);
+}
+
+/**
+ * Render document path template.
+ * @param {string} template
+ * @param {object} data
+ * @returns {string}
+ */
+function renderPathTemplate(template, data) {
+  const rendered = renderTemplate(template || DEFAULT_PATH_TEMPLATE, data);
+  const normalized = String(rendered || '')
+    .replace(/\\/g, '/')
+    .replace(/\/{2,}/g, '/')
+    .replace(/\/+$/g, '');
+  return normalized.startsWith('/') ? normalized : `/${normalized}`;
 }
 
 // ── Main logic ────────────────────────────────────────────────────
@@ -258,9 +414,14 @@ async function main() {
   const template = config.template || DEFAULT_TEMPLATE;
   const headerTemplate = config.headerTemplate || DEFAULT_HEADER_TEMPLATE;
   const parentPath = config.parentPath || '/Codex Sessions';
+  const pathTemplate = config.pathTemplate || DEFAULT_PATH_TEMPLATE;
   const port = config.siyuanPort || '6806';
   const siyuanUrl = config.siyuanUrl || `http://127.0.0.1:${port}`;
   const token = config.siyuanToken || getSiYuanToken();
+
+  if (!shouldSyncProject(cwd, config)) {
+    return;
+  }
 
   // 3. Cleanup stale state files (best-effort)
   cleanupStaleStates();
@@ -311,6 +472,7 @@ async function main() {
   }
 
   messages = normalizeMessages(messages);
+  messages = filterMessages(messages, config);
 
   const syncMode = config.syncMode || 'classic';
   messages = filterMessagesBySyncMode(messages, syncMode, lastAssistantMessage);
@@ -328,7 +490,8 @@ async function main() {
 
   if (!state.docId) {
     // First run — create a new document
-    const projectName = path.basename(cwd);
+    const normalizedCwd = normalizeMatchValue(cwd).replace(/\/+$/g, '');
+    const projectName = sanitizePathSegment(path.posix.basename(normalizedCwd) || path.basename(cwd), 60);
     const firstUserMsg = messages.find(m => m.role === 'user');
     const firstText = firstUserMsg
       ? firstUserMsg.parts.find(p => p.type === 'text')?.text || ''
@@ -342,8 +505,13 @@ async function main() {
     });
 
     const today = formatDate(new Date());
-    const dailyPath = api.getDailyPath(parentPath, today);
-    const docPath = `${dailyPath}/${title}`;
+    const docPath = renderPathTemplate(pathTemplate, {
+      parentPath: String(parentPath || '/Codex Sessions').replace(/\\/g, '/').replace(/\/+$/g, ''),
+      date: today,
+      projectName,
+      title,
+      sessionId,
+    });
 
     const fullMarkdown = header + '\n' + markdown;
     const docId = await api.createDocWithMd(config.notebook, docPath, fullMarkdown);
@@ -367,4 +535,14 @@ if (require.main === module) {
   });
 }
 
-module.exports = { buildFallbackAssistantMessage, buildFinalAssistantMessage, filterMessagesBySyncMode };
+module.exports = {
+  buildFallbackAssistantMessage,
+  buildFinalAssistantMessage,
+  filterMessagesBySyncMode,
+  parsePatternLines,
+  wildcardToRegExp,
+  matchesAnyPattern,
+  shouldSyncProject,
+  filterMessages,
+  renderPathTemplate,
+};

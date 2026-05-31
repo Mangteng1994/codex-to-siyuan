@@ -18,10 +18,14 @@ const DEFAULT_HEADER_TEMPLATE =
 const DEFAULT_CONFIG = {
   notebook: '',
   parentPath: '/Codex Sessions',
+  pathTemplate: '${parentPath}/${date}/${title}',
   siyuanPort: '6806',
   template: DEFAULT_TEMPLATE,
   headerTemplate: DEFAULT_HEADER_TEMPLATE,
   syncMode: 'classic',
+  includeProjectPatterns: '',
+  excludeProjectPatterns: '',
+  excludeContentPatterns: '',
 };
 
 module.exports = class CodexToSiYuan extends Plugin {
@@ -77,10 +81,14 @@ module.exports = class CodexToSiYuan extends Plugin {
       confirmCallback: async () => {
         this.config.notebook = inputs.notebook.value;
         this.config.parentPath = inputs.parentPath.value || '/Codex Sessions';
+        this.config.pathTemplate = inputs.pathTemplate.value || '${parentPath}/${date}/${title}';
         this.config.siyuanPort = inputs.port.value || '6806';
         this.config.syncMode = inputs.syncMode.value || 'classic';
         this.config.template = inputs.template.value || DEFAULT_TEMPLATE;
         this.config.headerTemplate = inputs.header.value || DEFAULT_HEADER_TEMPLATE;
+        this.config.includeProjectPatterns = inputs.includeProjectPatterns.value || '';
+        this.config.excludeProjectPatterns = inputs.excludeProjectPatterns.value || '';
+        this.config.excludeContentPatterns = inputs.excludeContentPatterns.value || '';
         await this.saveData(CONFIG_KEY, this.config);
         await this.writeHookConfig();
       },
@@ -88,10 +96,14 @@ module.exports = class CodexToSiYuan extends Plugin {
         // Reset inputs to saved config values on cancel / close
         inputs.notebook.value = this.config.notebook;
         inputs.parentPath.value = this.config.parentPath;
+        inputs.pathTemplate.value = this.config.pathTemplate || '${parentPath}/${date}/${title}';
         inputs.port.value = this.config.siyuanPort || '6806';
         inputs.syncMode.value = this.config.syncMode || 'classic';
         inputs.template.value = this.config.template;
         inputs.header.value = this.config.headerTemplate;
+        inputs.includeProjectPatterns.value = this.config.includeProjectPatterns || '';
+        inputs.excludeProjectPatterns.value = this.config.excludeProjectPatterns || '';
+        inputs.excludeContentPatterns.value = this.config.excludeContentPatterns || '';
       },
     });
 
@@ -159,6 +171,13 @@ module.exports = class CodexToSiYuan extends Plugin {
     parentPathInput.placeholder = '/Codex Sessions';
     inputs.parentPath = parentPathInput;
 
+    // -- Path template input --
+    const pathTemplateInput = document.createElement('input');
+    pathTemplateInput.className = 'b3-text-field fn__block';
+    pathTemplateInput.value = this.config.pathTemplate || '${parentPath}/${date}/${title}';
+    pathTemplateInput.placeholder = '${parentPath}/${date}/${title}';
+    inputs.pathTemplate = pathTemplateInput;
+
     // -- SiYuan port input --
     const portInput = document.createElement('input');
     portInput.className = 'b3-text-field fn__block';
@@ -208,6 +227,30 @@ module.exports = class CodexToSiYuan extends Plugin {
     headerInput.style.fontFamily = 'monospace';
     headerInput.value = this.config.headerTemplate;
     inputs.header = headerInput;
+
+    // -- Include project patterns textarea --
+    const includeProjectPatternsInput = document.createElement('textarea');
+    includeProjectPatternsInput.className = 'b3-text-field fn__block';
+    includeProjectPatternsInput.style.height = '80px';
+    includeProjectPatternsInput.style.fontFamily = 'monospace';
+    includeProjectPatternsInput.value = this.config.includeProjectPatterns || '';
+    inputs.includeProjectPatterns = includeProjectPatternsInput;
+
+    // -- Exclude project patterns textarea --
+    const excludeProjectPatternsInput = document.createElement('textarea');
+    excludeProjectPatternsInput.className = 'b3-text-field fn__block';
+    excludeProjectPatternsInput.style.height = '80px';
+    excludeProjectPatternsInput.style.fontFamily = 'monospace';
+    excludeProjectPatternsInput.value = this.config.excludeProjectPatterns || '';
+    inputs.excludeProjectPatterns = excludeProjectPatternsInput;
+
+    // -- Exclude content patterns textarea --
+    const excludeContentPatternsInput = document.createElement('textarea');
+    excludeContentPatternsInput.className = 'b3-text-field fn__block';
+    excludeContentPatternsInput.style.height = '80px';
+    excludeContentPatternsInput.style.fontFamily = 'monospace';
+    excludeContentPatternsInput.value = this.config.excludeContentPatterns || '';
+    inputs.excludeContentPatterns = excludeContentPatternsInput;
 
     // -- Test connection button --
     const testBtn = document.createElement('button');
@@ -262,6 +305,13 @@ module.exports = class CodexToSiYuan extends Plugin {
     });
 
     this.setting.addItem({
+      title: this.i18n.setting.pathTemplate,
+      description: this.i18n.setting.pathTemplateDesc,
+      direction: 'row',
+      createActionElement: () => pathTemplateInput,
+    });
+
+    this.setting.addItem({
       title: this.i18n.setting.siyuanPort,
       description: this.i18n.setting.siyuanPortDesc,
       direction: 'row',
@@ -295,6 +345,27 @@ module.exports = class CodexToSiYuan extends Plugin {
       description: this.i18n.setting.headerTemplateDesc,
       direction: 'column',
       createActionElement: () => headerInput,
+    });
+
+    this.setting.addItem({
+      title: this.i18n.setting.includeProjectPatterns,
+      description: this.i18n.setting.includeProjectPatternsDesc,
+      direction: 'column',
+      createActionElement: () => includeProjectPatternsInput,
+    });
+
+    this.setting.addItem({
+      title: this.i18n.setting.excludeProjectPatterns,
+      description: this.i18n.setting.excludeProjectPatternsDesc,
+      direction: 'column',
+      createActionElement: () => excludeProjectPatternsInput,
+    });
+
+    this.setting.addItem({
+      title: this.i18n.setting.excludeContentPatterns,
+      description: this.i18n.setting.excludeContentPatternsDesc,
+      direction: 'column',
+      createActionElement: () => excludeContentPatternsInput,
     });
 
     this.setting.addItem({
@@ -494,10 +565,14 @@ if (hooksConfig.hooks && hooksConfig.hooks.Stop) {
     const hookConfig = {
       notebook: this.config.notebook,
       parentPath: this.config.parentPath,
+      pathTemplate: this.config.pathTemplate || '${parentPath}/${date}/${title}',
       siyuanPort: this.config.siyuanPort || '6806',
       template: this.config.template,
       headerTemplate: this.config.headerTemplate,
       syncMode: this.config.syncMode || 'classic',
+      includeProjectPatterns: this.config.includeProjectPatterns || '',
+      excludeProjectPatterns: this.config.excludeProjectPatterns || '',
+      excludeContentPatterns: this.config.excludeContentPatterns || '',
     };
 
     await this.saveData(HOOK_CONFIG_KEY, hookConfig);
