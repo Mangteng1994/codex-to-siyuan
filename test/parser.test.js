@@ -618,6 +618,38 @@ test('formatMessages auto-closes unclosed code fence to protect following headin
   assert.match(markdown, /## 🧑 User/);
 });
 
+
+test('debug needle scan finds skipped entry with matching text', () => {
+  const oldDebug = process.env.CODEX_TO_SIYUAN_DEBUG;
+  const oldNeedle = process.env.CODEX_TO_SIYUAN_DEBUG_NEEDLE;
+  process.env.CODEX_TO_SIYUAN_DEBUG = '1';
+  process.env.CODEX_TO_SIYUAN_DEBUG_NEEDLE = 'UNIQUE_NEEDLE_XYZ123';
+
+  const filePath = writeJsonl([
+    { type: 'unknown_event', payload: { type: 'custom_type', text: 'contains UNIQUE_NEEDLE_XYZ123 here' } },
+    { type: 'user', message: { content: 'normal message' } },
+  ]);
+
+  let stderrOutput = '';
+  const orig = process.stderr.write;
+  process.stderr.write = (chunk) => { stderrOutput += String(chunk); return true; };
+
+  try {
+    parseTranscript(filePath, 0);
+  } finally {
+    process.stderr.write = orig;
+    process.env.CODEX_TO_SIYUAN_DEBUG = oldDebug;
+    process.env.CODEX_TO_SIYUAN_DEBUG_NEEDLE = oldNeedle;
+  }
+
+  // Should have printed structured debug for the matching entry
+  assert.match(stderrOutput, /STRUCT unhandled entry/);
+  assert.match(stderrOutput, /STRUCT HIT:/);
+  assert.match(stderrOutput, /UNIQUE_NEEDLE_XYZ123/);
+  assert.match(stderrOutput, /entry\.type=/);
+  assert.match(stderrOutput, /payload\.type=/);
+});
+
 test('document title removes unsafe path characters', () => {
   const unsafe = 'a/b\\c:d*e?f"g<h>i|j   k';
   const { title } = generateDocHeader({

@@ -789,6 +789,151 @@ ${content}\
   }
 });
 
+
+
+test('short retry: first parse no user, retry finds user after 300ms', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hook-rty1-'));
+  const sessionId = `e2e-rty1-${Date.now()}-kkk`;
+  const statePath = getStatePath(sessionId);
+  const transcriptPath = path.join(tempDir, 'session.jsonl');
+  const configPath = path.join(tempDir, 'config.json');
+
+  try { fs.rmSync(statePath, { force: true }); } catch {}
+  const fake = await startFakeSiYuanMultiSession();
+
+  try {
+    fs.writeFileSync(configPath, JSON.stringify({
+      notebook: 'notebook-rty1',
+      siyuanUrl: fake.baseUrl,
+      siyuanToken: 'token-rty1',
+      syncMode: 'classic',
+      parentPath: '/Codex Sessions',
+      pathTemplate: '${parentPath}/${date}/${title}-${sessionIdShort}',
+      template: '${role} (${time})\
+\
+${content}\
+\
+---\
+',
+      headerTemplate: '# ${projectName}\
+\
+---\
+',
+    }), 'utf8');
+
+    // First write: only assistant (no user)
+    writeJsonl(transcriptPath, [
+      { type: 'turn_context', payload: { turn_id: 'turn-rty1-1' } },
+      {
+        timestamp: '2026-05-31T12:00:00.000Z',
+        type: 'response_item',
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'auto reply first' }] },
+      },
+    ]);
+
+    // Start hook, but in background append user entries after 150ms
+    const hookPromise = runHook({
+      session_id: sessionId,
+      transcript_path: transcriptPath,
+      cwd: 'C:\demo-rty1',
+    }, {
+      CODEX_TO_SIYUAN_CONFIG: configPath,
+      CODEX_TO_SIYUAN_DEBUG: '1',
+    });
+
+    // After 150ms, append user entries (hook retries at 300ms)
+    await new Promise(resolve => setTimeout(resolve, 150));
+    writeJsonl(transcriptPath, [
+      { type: 'turn_context', payload: { turn_id: 'turn-rty1-1' } },
+      {
+        timestamp: '2026-05-31T12:00:01.000Z',
+        type: 'response_item',
+        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'test retry user' }] },
+      },
+    ]);
+
+    const r1 = await hookPromise;
+
+    assert.equal(r1.code, 0);
+    assert.equal(fake.requests.length, 1);
+    assert.equal(fake.requests[0].url, '/api/filetree/createDocWithMd');
+    assert.match(fake.requests[0].body.markdown, /test retry user/);
+    assert.match(fake.requests[0].body.markdown, /auto reply first/);
+
+    const savedState = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    assert.ok(savedState.lastByteOffset > 0, 'offset should advance after successful retry');
+  } finally {
+    await new Promise(resolve => fake.server.close(resolve));
+    fs.rmSync(statePath, { force: true });
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('short retry: retry fails, falls back to assistant-only doc', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hook-rty2-'));
+  const sessionId = `e2e-rty2-${Date.now()}-lll`;
+  const statePath = getStatePath(sessionId);
+  const transcriptPath = path.join(tempDir, 'session.jsonl');
+  const configPath = path.join(tempDir, 'config.json');
+
+  try { fs.rmSync(statePath, { force: true }); } catch {}
+  const fake = await startFakeSiYuanMultiSession();
+
+  try {
+    fs.writeFileSync(configPath, JSON.stringify({
+      notebook: 'notebook-rty2',
+      siyuanUrl: fake.baseUrl,
+      siyuanToken: 'token-rty2',
+      syncMode: 'classic',
+      parentPath: '/Codex Sessions',
+      pathTemplate: '${parentPath}/${date}/${title}-${sessionIdShort}',
+      template: '${role} (${time})\
+\
+${content}\
+\
+---\
+',
+      headerTemplate: '# ${projectName}\
+\
+---\
+',
+    }), 'utf8');
+
+    // Only assistant, no user ever
+    writeJsonl(transcriptPath, [
+      { type: 'turn_context', payload: { turn_id: 'turn-rty2-1' } },
+      {
+        timestamp: '2026-05-31T13:00:00.000Z',
+        type: 'response_item',
+        payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'only assistant ever' }] },
+      },
+    ]);
+
+    const r1 = await runHook({
+      session_id: sessionId,
+      transcript_path: transcriptPath,
+      cwd: 'C:\demo-rty2',
+      last_assistant_message: 'only assistant ever',
+    }, {
+      CODEX_TO_SIYUAN_CONFIG: configPath,
+      CODEX_TO_SIYUAN_DEBUG: '1',
+    });
+
+    assert.equal(r1.code, 0);
+    assert.equal(fake.requests.length, 1);
+    assert.equal(fake.requests[0].url, '/api/filetree/createDocWithMd');
+    assert.match(fake.requests[0].body.markdown, /only assistant ever/);
+
+    const savedState = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    assert.equal(savedState.lastByteOffset, 0, 'offset must NOT advance after failed retry');
+    assert.ok(savedState.pendingFallbackHash, 'pending fallback hash must be set');
+  } finally {
+    await new Promise(resolve => fake.server.close(resolve));
+    fs.rmSync(statePath, { force: true });
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test('fallback without matching assistant does not dedup later runs', async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-hook-pend2-'));
   const sessionId = `e2e-pend2-${Date.now()}-jjj`;

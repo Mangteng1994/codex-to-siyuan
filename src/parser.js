@@ -669,6 +669,66 @@ function extractAnyText(value, max) {
  * @param {string} reason
  * @param {object} [entry]
  */
+
+/**
+ * Print a structured summary of a single transcript entry for debug.
+ * Only called when CODEX_TO_SIYUAN_DEBUG=1 and needle matches.
+ * @param {object} entry
+ * @param {string} label - Reason label
+ */
+function debugEntryStructure(entry, label) {
+  if (process.env.CODEX_TO_SIYUAN_DEBUG !== '1') return;
+  const payload = entry && entry.payload && typeof entry.payload === 'object' ? entry.payload : {};
+  const item = entry && entry.item && typeof entry.item === 'object' ? entry.item : {};
+  const msg = entry && entry.message && typeof entry.message === 'object' ? entry.message : {};
+
+  process.stderr.write(
+    `[codex-to-siyuan] STRUCT ${label}:` +
+    ` entry.type=${JSON.stringify(entry.type)}` +
+    ` payload.type=${JSON.stringify(payload.type)}` +
+    ` payload.role=${JSON.stringify(payload.role)}` +
+    ` item.type=${JSON.stringify(item.type)}` +
+    ` entry.keys=[${Object.keys(entry || {}).slice(0, 15).join(',')}]` +
+    ` payload.keys=[${Object.keys(payload).slice(0, 10).join(',')}]` +
+    ` item.keys=[${Object.keys(item).slice(0, 10).join(',')}]` +
+    ` msg.keys=[${Object.keys(msg).slice(0, 10).join(',')}]` +
+    `\n`
+  );
+
+  const needle = getDebugNeedle();
+  if (!needle) return;
+
+  // Scan common nested paths for the needle
+  const scanPaths = [
+    ['entry.message', entry.message],
+    ['entry.message.content', entry.message && entry.message.content],
+    ['entry.content', entry.content],
+    ['entry.text', entry.text],
+    ['entry.input', entry.input],
+    ['payload.message', payload.message],
+    ['payload.message.content', payload.message && payload.message.content],
+    ['payload.content', payload.content],
+    ['payload.text', payload.text],
+    ['payload.input', payload.input],
+    ['payload.items', payload.items],
+    ['payload.item', payload.item],
+    ['item.content', item.content],
+    ['item.text', item.text],
+    ['item.input', item.input],
+  ];
+
+  for (const [path, value] of scanPaths) {
+    if (value === undefined || value === null) continue;
+    const str = typeof value === 'string' ? value : JSON.stringify(value);
+    if (str.includes(needle)) {
+      const preview = str.length > 120 ? str.slice(0, 120) + '...' : str;
+      process.stderr.write(
+        `[codex-to-siyuan] STRUCT HIT: path=${path}, preview=${JSON.stringify(preview)}\n`
+      );
+    }
+  }
+}
+
 function debugSkip(entryType, payloadType, payloadRole, reason, entry) {
   if (process.env.CODEX_TO_SIYUAN_DEBUG !== '1') return;
   const payload = entry && entry.payload && typeof entry.payload === 'object' ? entry.payload : {};
@@ -676,6 +736,9 @@ function debugSkip(entryType, payloadType, payloadRole, reason, entry) {
   const needle = getDebugNeedle();
   const matches = needle ? findTextMatches(entry, needle) : [];
   const suspicious = needle ? [] : findSuspiciousTextFields(entry);
+  if (needle && matches.length > 0) {
+    debugEntryStructure(entry, reason);
+  }
   process.stderr.write(
     `[codex-to-siyuan] skipped transcript entry: entry.type=${entryType || ''}, payload.type=${payloadType || ''}, payload.role=${payloadRole || ''}, entry.keys=${listKeys(entry)}, payload.keys=${listKeys(payload)}, item.keys=${listKeys(item)}, needle=${needle || ''}, matches=${matches.join('|')}, suspicious=${suspicious.join('|')}, reason=${reason}\n`
   );

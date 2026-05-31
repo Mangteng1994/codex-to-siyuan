@@ -616,6 +616,39 @@ function debugMessageListFile(label, messages) {
   });
 }
 
+
+/**
+ * Dump raw transcript lines for debug when first-run misses user text.
+ * @param {string} transcriptPath
+ */
+function debugDumpTranscript(transcriptPath) {
+  if (!transcriptPath || !fs.existsSync(transcriptPath)) return;
+  try {
+    const raw = fs.readFileSync(transcriptPath, 'utf8');
+    const lines = raw.split('\n').filter(l => l.trim());
+    process.stderr.write(`[codex-to-siyuan] TRANSCRIPT DUMP (${lines.length} lines):\n`);
+    for (let i = 0; i < Math.min(lines.length, 20); i++) {
+      try {
+        const entry = JSON.parse(lines[i]);
+        const payload = entry && entry.payload || {};
+        process.stderr.write(
+          `  [${i}] type=${entry.type} ptype=${payload.type} prole=${payload.role} ` +
+          `keys=[${Object.keys(entry).slice(0, 12).join(',')}]` +
+          (entry.turn_id ? ` turn=${entry.turn_id}` : '') +
+          `\n`
+        );
+      } catch {
+        process.stderr.write(`  [${i}] (non-JSON) ${lines[i].slice(0, 120)}\n`);
+      }
+    }
+    if (lines.length > 20) {
+      process.stderr.write(`  ... (${lines.length - 20} more lines)\n`);
+    }
+  } catch (e) {
+    process.stderr.write(`[codex-to-siyuan] TRANSCRIPT DUMP failed: ${e.message}\n`);
+  }
+}
+
 async function main() {
   // 1. Read Codex hook input from stdin
   const raw = await readStdin();
@@ -697,6 +730,42 @@ async function main() {
     messages = result.messages;
     rawParsedMessages = result.messages.slice();
     newByteOffset = result.newByteOffset;
+  }
+
+  // 5a. Short retry: first run may miss user due to write timing
+  const _hasUserText = (msgs) => Array.isArray(msgs) && msgs.some(
+    m => m && m.role === 'user'
+      && Array.isArray(m.parts)
+      && m.parts.some(p => p && p.type === 'text' && String(p.text || '').trim())
+  );
+
+  if (isFirstRun
+      && syncMode !== 'minimal'
+      && transcriptPath
+      && fs.existsSync(transcriptPath)
+      && !_hasUserText(rawParsedMessages)) {
+    const retryDelays = [300, 700];
+    for (const delay of retryDelays) {
+      debugLog(`short retry: waiting ${delay}ms for transcript user text...`);
+      debugLogFile(`short retry: waiting ${delay}ms for transcript user text...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      const retryResult = parseTranscript(transcriptPath, state.lastByteOffset);
+      if (_hasUserText(retryResult.messages)) {
+        debugLog(`short retry SUCCESS at ${delay}ms: found user text`);
+        debugLogFile(`short retry SUCCESS at ${delay}ms: found user text`);
+        messages = retryResult.messages;
+        rawParsedMessages = retryResult.messages.slice();
+        newByteOffset = retryResult.newByteOffset;
+        break;
+      }
+      debugLog(`short retry at ${delay}ms: still no user text`);
+      debugLogFile(`short retry at ${delay}ms: still no user text`);
+    }
+  }
+
+  // 5b. Debug: dump transcript structure when first run still has no user text
+  if (isFirstRun && process.env.CODEX_TO_SIYUAN_DEBUG === '1' && !_hasUserText(rawParsedMessages)) {
+    debugDumpTranscript(transcriptPath);
   }
 
   debugLog(`hook summary start: sessionId=${sessionId}, transcriptPath=${transcriptPath || ''}, previousByteOffset=${previousByteOffset}, newByteOffset=${newByteOffset}, rawParsedMessages=${rawParsedMessages.length}`);
