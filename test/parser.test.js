@@ -82,6 +82,19 @@ test('cleanMessageText removes environment_context and keeps real正文', () => 
   assert.equal(cleanMessageText(raw), '测试');
 });
 
+test('cleanMessageText removes environment_context and keeps real user text 在吗', () => {
+  const raw = `
+<environment_context>
+  <cwd>C:\\demo</cwd>
+  <shell>powershell</shell>
+</environment_context>
+
+在吗
+  `;
+
+  assert.equal(cleanMessageText(raw), '在吗');
+});
+
 test('cleanMessageText returns empty when only environment_context exists', () => {
   const raw = `
     <environment_context>
@@ -117,6 +130,74 @@ test('Codex user message strips environment_context before writing', () => {
   assert.equal(messages.length, 1);
   assert.equal(messages[0].role, 'user');
   assert.equal(messages[0].parts[0].text, '测试');
+});
+
+test('Codex user message parses from payload.input string when not in message.content', () => {
+  const filePath = writeJsonl([
+    { type: 'turn_context', payload: { turn_id: 'turn-input-1' } },
+    {
+      timestamp: '2026-05-29T01:00:00.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'turn_input',
+        role: 'user',
+        input: '<environment_context><cwd>C:\\\\demo</cwd></environment_context>\n\n在吗',
+      },
+    },
+  ]);
+
+  const { messages } = parseTranscript(filePath, 0);
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].role, 'user');
+  assert.equal(messages[0].turnId, 'turn-input-1');
+  assert.equal(messages[0].parts[0].text, '在吗');
+});
+
+test('Codex user message parses from payload.message.content when payload.type is not message', () => {
+  const filePath = writeJsonl([
+    { type: 'turn_context', payload: { turn_id: 'turn-input-2' } },
+    {
+      timestamp: '2026-05-29T01:00:00.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'input',
+        role: 'user',
+        message: {
+          content: [{ type: 'input_text', text: '在吗' }],
+        },
+      },
+    },
+  ]);
+
+  const { messages } = parseTranscript(filePath, 0);
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].role, 'user');
+  assert.equal(messages[0].parts[0].text, '在吗');
+});
+
+test('metadata-like payload.input object is not misclassified as user text', () => {
+  const filePath = writeJsonl([
+    { type: 'turn_context', payload: { turn_id: 'turn-input-3' } },
+    {
+      timestamp: '2026-05-29T01:00:00.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'turn_input',
+        role: 'user',
+        input: {
+          cwd: 'C:\\demo',
+          session_id: 'sid-1',
+          model: 'gpt-x',
+        },
+      },
+    },
+  ]);
+
+  const { messages } = parseTranscript(filePath, 0);
+
+  assert.equal(messages.length, 0);
 });
 
 test('user message with only environment_context is ignored', () => {

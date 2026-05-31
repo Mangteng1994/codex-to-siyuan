@@ -170,6 +170,22 @@ test('classic mode without turnId uses message order segmentation and keeps earl
   ]);
 });
 
+test('classic mode skips assistant-only segment at document start', () => {
+  const normalized = [
+    { role: 'assistant', timestamp: '2026-05-29T01:00:00.000Z', parts: [{ type: 'text', text: 'assistant1' }], turnId: 'turn-a' },
+    { role: 'user', timestamp: '2026-05-29T01:00:01.000Z', parts: [{ type: 'text', text: 'user2' }], turnId: 'turn-b' },
+    { role: 'assistant', timestamp: '2026-05-29T01:00:02.000Z', parts: [{ type: 'text', text: 'assistant2' }], turnId: 'turn-b' },
+  ];
+
+  const filtered = buildClassicModeMessages(normalized);
+
+  assert.deepEqual(filtered.map((msg) => [msg.role, msg.parts[0].text]), [
+    ['user', 'user2'],
+    ['assistant', 'assistant2'],
+  ]);
+  assert.equal(filtered.some((msg) => msg.parts[0].text === 'assistant1'), false);
+});
+
 // ── Minimal mode ──────────────────────────────────────────────────
 
 test('minimal mode returns only final assistant output (with last_assistant_message)', () => {

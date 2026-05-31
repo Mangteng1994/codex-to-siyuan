@@ -4,6 +4,15 @@
  */
 
 const fs = require('fs');
+const MESSAGE_TEXT_KEYS = ['content', 'text', 'input', 'input_text', 'output_text'];
+const TOOL_LIKE_TYPES = new Set([
+  'function_call',
+  'function_call_output',
+  'tool_call',
+  'tool_use',
+  'tool_result',
+  'tool_output',
+]);
 
 /**
  * 清理消息文本中的环境上下文块。
@@ -71,7 +80,7 @@ function parseEntry(entry, turnId = null) {
     return codexMessage;
   }
 
-  debugSkip(entry.type, entry.payload && entry.payload.type, entry.payload && entry.payload.name, 'unhandled entry');
+  debugSkip(entry.type, entry.payload && entry.payload.type, entry.payload && entry.payload.role, 'unhandled entry', entry);
   return null;
 }
 
@@ -88,9 +97,6 @@ function parseMessage(entry, turnId = null) {
   // Handle different message content formats
   const message = entry.message || {};
   const rawContent = message.content;
-
-  if (!rawContent) return null;
-
   const parts = [];
 
   if (typeof rawContent === 'string') {
@@ -117,6 +123,10 @@ function parseMessage(entry, turnId = null) {
     }
   }
 
+  if (parts.length === 0) {
+    parts.push(...extractCodexMessageParts(entry, entry.payload || {}, entry.item || null, role));
+  }
+
   if (parts.length === 0) return null;
 
   return { role, timestamp, parts, turnId: entry.turn_id || turnId || null };
@@ -129,16 +139,24 @@ function parseMessage(entry, turnId = null) {
  * @returns {object|null} Structured message or null
  */
 function parseCodexEntry(entry, turnId = null) {
-  if (entry.type !== 'response_item') {
-    return null;
-  }
-
   const payload = entry.payload || {};
+  const item = entry.item || payload.item || null;
   const timestamp = entry.timestamp || null;
   const resolvedTurnId = payload.turn_id || entry.turn_id || turnId || null;
+  const role = inferCodexRole(entry, payload, item);
 
   if (payload.type === 'message' && (payload.role === 'user' || payload.role === 'assistant')) {
     return parseCodexMessage(payload.role, timestamp, payload.content, resolvedTurnId);
+  }
+
+  const messageParts = extractCodexMessageParts(entry, payload, item, role);
+  if (role && messageParts.length > 0) {
+    return {
+      role,
+      timestamp,
+      parts: messageParts,
+      turnId: resolvedTurnId,
+    };
   }
 
   const toolUse = parseCodexToolUse(payload);
@@ -154,14 +172,14 @@ function parseCodexEntry(entry, turnId = null) {
   const text = extractCodexReadableText(payload);
   if (text) {
     return {
-      role: payload.role === 'user' ? 'user' : 'assistant',
+      role: role === 'user' ? 'user' : 'assistant',
       timestamp,
       parts: [{ type: 'text', text }],
       turnId: resolvedTurnId,
     };
   }
 
-  debugSkip(entry.type, payload.type, payload.name, 'unhandled codex payload');
+  debugSkip(entry.type, payload.type, payload.role, 'unhandled codex payload', entry);
   return null;
 }
 
@@ -194,6 +212,160 @@ function parseCodexMessage(role, timestamp, rawContent, turnId = null) {
   if (parts.length === 0) return null;
 
   return { role, timestamp, parts, turnId };
+}
+
+/**
+ * Infer user/assistant role from common Codex transcript structures.
+ * @param {object} entry
+ * @param {object} payload
+ * @param {object|null} item
+ * @returns {'user'|'assistant'|null}
+ */
+function inferCodexRole(entry, payload, item) {
+  const roleCandidates = [
+    entry && entry.role,
+    entry && entry.message && entry.message.role,
+    payload && payload.role,
+    payload && payload.message && payload.message.role,
+    item && item.role,
+    item && item.message && item.message.role,
+  ];
+
+  for (const candidate of roleCandidates) {
+    if (candidate === 'user' || candidate === 'assistant') {
+      return candidate;
+    }
+  }
+
+  const typeCandidates = [
+    entry && entry.type,
+    payload && payload.type,
+    item && item.type,
+  ];
+
+  for (const candidate of typeCandidates) {
+    const inferred = inferRoleFromType(candidate);
+    if (inferred) return inferred;
+  }
+
+  return null;
+}
+
+/**
+ * Infer role from non-tool type names.
+ * @param {string} value
+ * @returns {'user'|'assistant'|null}
+ */
+function inferRoleFromType(value) {
+  const type = String(value || '').toLowerCase();
+  if (!type || TOOL_LIKE_TYPES.has(type)) return null;
+
+  if (type === 'input' || type === 'user_input' || type === 'turn_input' || type === 'prompt') {
+    return 'user';
+  }
+  if (type === 'output' || type === 'assistant_output' || type === 'assistant_response') {
+    return 'assistant';
+  }
+  if (type.includes('turn_input') || type.includes('user')) {
+    return 'user';
+  }
+  if (type.includes('assistant')) {
+    return 'assistant';
+  }
+
+  return null;
+}
+
+/**
+ * Extract text parts from common Codex message containers.
+ * @param {object} entry
+ * @param {object} payload
+ * @param {object|null} item
+ * @param {'user'|'assistant'|null} role
+ * @returns {Array}
+ */
+function extractCodexMessageParts(entry, payload, item, role) {
+  if (!role) return [];
+
+  const parts = [];
+  const seen = new Set();
+  const candidates = [
+    entry && entry.message,
+    entry && entry.message && entry.message.content,
+    entry && entry.content,
+    entry && entry.text,
+    entry && entry.input,
+    payload && payload.message,
+    payload && payload.message && payload.message.content,
+    payload && payload.content,
+    payload && payload.text,
+    payload && payload.input,
+    item,
+    item && item.message,
+    item && item.message && item.message.content,
+    item && item.content,
+    item && item.text,
+    item && item.input,
+  ];
+
+  for (const candidate of candidates) {
+    for (const text of extractTextCandidates(candidate, role)) {
+      if (!seen.has(text)) {
+        seen.add(text);
+        parts.push({ type: 'text', text });
+      }
+    }
+  }
+
+  return parts;
+}
+
+/**
+ * Recursively extract text from whitelisted message-like structures.
+ * @param {*} value
+ * @param {'user'|'assistant'} role
+ * @param {number} [depth=0]
+ * @returns {Array<string>}
+ */
+function extractTextCandidates(value, role, depth = 0) {
+  if (!value || depth > 4) return [];
+
+  if (typeof value === 'string') {
+    const text = cleanMessageText(value);
+    return text ? [text] : [];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => extractTextCandidates(item, role, depth + 1));
+  }
+
+  if (typeof value !== 'object') {
+    return [];
+  }
+
+  const type = String(value.type || '').toLowerCase();
+  if (TOOL_LIKE_TYPES.has(type)) {
+    return [];
+  }
+
+  if ((type === 'text' || type === 'input_text' || type === 'output_text') && typeof value.text === 'string') {
+    const text = cleanMessageText(value.text);
+    return text ? [text] : [];
+  }
+
+  const results = [];
+
+  if (value.message) {
+    results.push(...extractTextCandidates(value.message, role, depth + 1));
+  }
+
+  for (const key of MESSAGE_TEXT_KEYS) {
+    if (key in value) {
+      results.push(...extractTextCandidates(value[key], role, depth + 1));
+    }
+  }
+
+  return results;
 }
 
 /**
@@ -467,14 +639,27 @@ function extractAnyText(value, max) {
  * Log skipped entries when debug is enabled.
  * @param {string|null} entryType
  * @param {string|null} payloadType
- * @param {string|null} payloadName
+ * @param {string|null} payloadRole
  * @param {string} reason
+ * @param {object} [entry]
  */
-function debugSkip(entryType, payloadType, payloadName, reason) {
+function debugSkip(entryType, payloadType, payloadRole, reason, entry) {
   if (process.env.CODEX_TO_SIYUAN_DEBUG !== '1') return;
+  const payload = entry && entry.payload && typeof entry.payload === 'object' ? entry.payload : {};
+  const item = entry && entry.item && typeof entry.item === 'object' ? entry.item : {};
   process.stderr.write(
-    `[codex-to-siyuan] skipped transcript entry: entry.type=${entryType || ''}, payload.type=${payloadType || ''}, payload.name=${payloadName || ''}, reason=${reason}\n`
+    `[codex-to-siyuan] skipped transcript entry: entry.type=${entryType || ''}, payload.type=${payloadType || ''}, payload.role=${payloadRole || ''}, entry.keys=${listKeys(entry)}, payload.keys=${listKeys(payload)}, item.keys=${listKeys(item)}, reason=${reason}\n`
   );
+}
+
+/**
+ * List object keys for debug output.
+ * @param {*} value
+ * @returns {string}
+ */
+function listKeys(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
+  return Object.keys(value).slice(0, 20).join('|');
 }
 
 /**

@@ -453,6 +453,10 @@ function buildClassicModeMessages(normalizedMessages) {
       .map(toLastAssistantTextMessage)
       .filter(Boolean);
 
+    if (userMessages.length === 0) {
+      continue;
+    }
+
     result.push(...userMessages);
 
     const lastAssistant = assistantMessages[assistantMessages.length - 1] || null;
