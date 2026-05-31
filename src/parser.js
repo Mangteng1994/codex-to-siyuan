@@ -4,7 +4,6 @@
  */
 
 const fs = require('fs');
-const MESSAGE_TEXT_KEYS = ['content', 'text', 'input', 'input_text', 'output_text'];
 const TOOL_LIKE_TYPES = new Set([
   'function_call',
   'function_call_output',
@@ -52,6 +51,7 @@ function parseTranscript(filePath, byteOffset = 0) {
 
       const msg = parseEntry(entry, currentTurnId);
       if (msg) messages.push(msg);
+      else debugEntryContaining(entry, '嘻嘻');
     } catch (e) {
       debugSkip('malformed_json', null, null, e.message);
       // Skip malformed lines silently
@@ -94,40 +94,11 @@ function parseMessage(entry, turnId = null) {
   const role = entry.type; // 'user' or 'assistant'
   const timestamp = entry.timestamp || null;
 
-  // Handle different message content formats
-  const message = entry.message || {};
-  const rawContent = message.content;
-  const parts = [];
-
-  if (typeof rawContent === 'string') {
-    const text = cleanMessageText(rawContent);
-    if (text) parts.push({ type: 'text', text });
-  } else if (Array.isArray(rawContent)) {
-    for (const block of rawContent) {
-      if (block.type === 'text' && block.text) {
-        const text = cleanMessageText(block.text);
-        if (text) parts.push({ type: 'text', text });
-      } else if (block.type === 'tool_use') {
-        parts.push({
-          type: 'tool_use',
-          name: block.name || 'unknown',
-          input: summarizeToolInput(block.input),
-        });
-      } else if (block.type === 'tool_result') {
-        // Include tool results with a brief summary
-        const resultText = extractToolResultText(block);
-        if (resultText) {
-          parts.push({ type: 'tool_result', text: resultText });
-        }
-      }
-    }
-  }
-
-  if (parts.length === 0) {
-    parts.push(...extractCodexMessageParts(entry, entry.payload || {}, entry.item || null, role));
-  }
+  const extracted = extractLegacyMessageParts(entry, role);
+  const parts = extracted.parts;
 
   if (parts.length === 0) return null;
+  debugParsedMessage(entry, role, entry.turn_id || turnId || null, parts, extracted.source);
 
   return { role, timestamp, parts, turnId: entry.turn_id || turnId || null };
 }
@@ -139,24 +110,32 @@ function parseMessage(entry, turnId = null) {
  * @returns {object|null} Structured message or null
  */
 function parseCodexEntry(entry, turnId = null) {
-  const payload = entry.payload || {};
-  const item = entry.item || payload.item || null;
-  const timestamp = entry.timestamp || null;
-  const resolvedTurnId = payload.turn_id || entry.turn_id || turnId || null;
-  const role = inferCodexRole(entry, payload, item);
-
-  if (payload.type === 'message' && (payload.role === 'user' || payload.role === 'assistant')) {
-    return parseCodexMessage(payload.role, timestamp, payload.content, resolvedTurnId);
+  if (entry.type !== 'response_item') {
+    return null;
   }
 
-  const messageParts = extractCodexMessageParts(entry, payload, item, role);
-  if (role && messageParts.length > 0) {
-    return {
-      role,
-      timestamp,
-      parts: messageParts,
-      turnId: resolvedTurnId,
-    };
+  const payload = entry.payload || {};
+  const timestamp = entry.timestamp || null;
+  const resolvedTurnId = payload.turn_id || entry.turn_id || turnId || null;
+
+  if (payload.type === 'message' && (payload.role === 'user' || payload.role === 'assistant')) {
+    const msg = parseCodexMessage(payload.role, timestamp, payload.content, resolvedTurnId, 'payload.content', entry);
+    if (msg) return msg;
+    debugEntryContaining(entry, '嘻嘻');
+    return null;
+  }
+
+  if (payload.role === 'user' && isUserInputPayloadType(payload.type)) {
+    const extracted = extractUserInputPayloadParts(payload);
+    if (extracted.parts.length > 0) {
+      debugParsedMessage(entry, 'user', resolvedTurnId, extracted.parts, extracted.source);
+      return {
+        role: 'user',
+        timestamp,
+        parts: extracted.parts,
+        turnId: resolvedTurnId,
+      };
+    }
   }
 
   const toolUse = parseCodexToolUse(payload);
@@ -172,7 +151,7 @@ function parseCodexEntry(entry, turnId = null) {
   const text = extractCodexReadableText(payload);
   if (text) {
     return {
-      role: role === 'user' ? 'user' : 'assistant',
+      role: 'assistant',
       timestamp,
       parts: [{ type: 'text', text }],
       turnId: resolvedTurnId,
@@ -189,183 +168,132 @@ function parseCodexEntry(entry, turnId = null) {
  * @param {string|null} timestamp
  * @param {string|Array} rawContent
  * @param {string|null} [turnId] - Current turn ID
+ * @param {string} [source]
+ * @param {object} [entry]
  * @returns {object|null} Structured message or null
  */
-function parseCodexMessage(role, timestamp, rawContent, turnId = null) {
+function parseCodexMessage(role, timestamp, rawContent, turnId = null, source = 'payload.content', entry = null) {
   if (!rawContent) return null;
 
-  const parts = [];
-
-  if (typeof rawContent === 'string') {
-    const text = cleanMessageText(rawContent);
-    if (text) parts.push({ type: 'text', text });
-  } else if (Array.isArray(rawContent)) {
-    for (const block of rawContent) {
-      const text = block.text || '';
-      if ((block.type === 'input_text' || block.type === 'output_text' || block.type === 'text') && text) {
-        const sanitized = cleanMessageText(text);
-        if (sanitized) parts.push({ type: 'text', text: sanitized });
-      }
-    }
-  }
+  const parts = extractTextPartsFromValue(rawContent);
 
   if (parts.length === 0) return null;
+  debugParsedMessage(entry, role, turnId, parts, source);
 
   return { role, timestamp, parts, turnId };
 }
 
 /**
- * Infer user/assistant role from common Codex transcript structures.
+ * Extract legacy user/assistant entry content by priority.
  * @param {object} entry
- * @param {object} payload
- * @param {object|null} item
- * @returns {'user'|'assistant'|null}
+ * @param {string} role
+ * @returns {{parts:Array, source:string}}
  */
-function inferCodexRole(entry, payload, item) {
-  const roleCandidates = [
-    entry && entry.role,
-    entry && entry.message && entry.message.role,
-    payload && payload.role,
-    payload && payload.message && payload.message.role,
-    item && item.role,
-    item && item.message && item.message.role,
+function extractLegacyMessageParts(entry, role) {
+  const sources = [
+    ['entry.message.content', entry && entry.message && entry.message.content],
+    ['entry.content', entry && entry.content],
+    ['entry.text', entry && entry.text],
+    ['entry.input', entry && entry.input],
   ];
 
-  for (const candidate of roleCandidates) {
-    if (candidate === 'user' || candidate === 'assistant') {
-      return candidate;
+  for (const [source, value] of sources) {
+    const parts = extractTextPartsFromValue(value, { includeTools: role === 'assistant' });
+    if (parts.length > 0) {
+      return { parts, source };
     }
   }
 
-  const typeCandidates = [
-    entry && entry.type,
-    payload && payload.type,
-    item && item.type,
+  return { parts: [], source: '' };
+}
+
+/**
+ * Whether payload type is an official user-input message container.
+ * @param {string} type
+ * @returns {boolean}
+ */
+function isUserInputPayloadType(type) {
+  return ['input', 'turn_input', 'user_input'].includes(String(type || '').toLowerCase());
+}
+
+/**
+ * Extract user input payload content by priority, one source only.
+ * @param {object} payload
+ * @returns {{parts:Array, source:string}}
+ */
+function extractUserInputPayloadParts(payload) {
+  const sources = [
+    ['payload.input', payload && payload.input],
+    ['payload.content', payload && payload.content],
+    ['payload.message.content', payload && payload.message && payload.message.content],
   ];
 
-  for (const candidate of typeCandidates) {
-    const inferred = inferRoleFromType(candidate);
-    if (inferred) return inferred;
+  for (const [source, value] of sources) {
+    const parts = extractTextPartsFromValue(value);
+    if (parts.length > 0) {
+      return { parts, source };
+    }
   }
 
-  return null;
+  return { parts: [], source: '' };
 }
 
 /**
- * Infer role from non-tool type names.
- * @param {string} value
- * @returns {'user'|'assistant'|null}
- */
-function inferRoleFromType(value) {
-  const type = String(value || '').toLowerCase();
-  if (!type || TOOL_LIKE_TYPES.has(type)) return null;
-
-  if (type === 'input' || type === 'user_input' || type === 'turn_input' || type === 'prompt') {
-    return 'user';
-  }
-  if (type === 'output' || type === 'assistant_output' || type === 'assistant_response') {
-    return 'assistant';
-  }
-  if (type.includes('turn_input') || type.includes('user')) {
-    return 'user';
-  }
-  if (type.includes('assistant')) {
-    return 'assistant';
-  }
-
-  return null;
-}
-
-/**
- * Extract text parts from common Codex message containers.
- * @param {object} entry
- * @param {object} payload
- * @param {object|null} item
- * @param {'user'|'assistant'|null} role
+ * Extract text/tool parts from one selected source.
+ * @param {*} value
+ * @param {object} [options]
+ * @param {boolean} [options.includeTools=false]
  * @returns {Array}
  */
-function extractCodexMessageParts(entry, payload, item, role) {
-  if (!role) return [];
-
-  const parts = [];
-  const seen = new Set();
-  const candidates = [
-    entry && entry.message,
-    entry && entry.message && entry.message.content,
-    entry && entry.content,
-    entry && entry.text,
-    entry && entry.input,
-    payload && payload.message,
-    payload && payload.message && payload.message.content,
-    payload && payload.content,
-    payload && payload.text,
-    payload && payload.input,
-    item,
-    item && item.message,
-    item && item.message && item.message.content,
-    item && item.content,
-    item && item.text,
-    item && item.input,
-  ];
-
-  for (const candidate of candidates) {
-    for (const text of extractTextCandidates(candidate, role)) {
-      if (!seen.has(text)) {
-        seen.add(text);
-        parts.push({ type: 'text', text });
-      }
-    }
-  }
-
-  return parts;
-}
-
-/**
- * Recursively extract text from whitelisted message-like structures.
- * @param {*} value
- * @param {'user'|'assistant'} role
- * @param {number} [depth=0]
- * @returns {Array<string>}
- */
-function extractTextCandidates(value, role, depth = 0) {
-  if (!value || depth > 4) return [];
+function extractTextPartsFromValue(value, options = {}) {
+  if (!value) return [];
+  const includeTools = options.includeTools === true;
 
   if (typeof value === 'string') {
     const text = cleanMessageText(value);
-    return text ? [text] : [];
+    return text ? [{ type: 'text', text }] : [];
   }
 
   if (Array.isArray(value)) {
-    return value.flatMap((item) => extractTextCandidates(item, role, depth + 1));
-  }
+    const parts = [];
+    for (const block of value) {
+      if (!block) continue;
+      if (typeof block === 'string') {
+        const text = cleanMessageText(block);
+        if (text) parts.push({ type: 'text', text });
+        continue;
+      }
 
-  if (typeof value !== 'object') {
-    return [];
-  }
-
-  const type = String(value.type || '').toLowerCase();
-  if (TOOL_LIKE_TYPES.has(type)) {
-    return [];
-  }
-
-  if ((type === 'text' || type === 'input_text' || type === 'output_text') && typeof value.text === 'string') {
-    const text = cleanMessageText(value.text);
-    return text ? [text] : [];
-  }
-
-  const results = [];
-
-  if (value.message) {
-    results.push(...extractTextCandidates(value.message, role, depth + 1));
-  }
-
-  for (const key of MESSAGE_TEXT_KEYS) {
-    if (key in value) {
-      results.push(...extractTextCandidates(value[key], role, depth + 1));
+      const type = String(block.type || '').toLowerCase();
+      const text = block.text || block.input_text || block.output_text || '';
+      if ((type === 'text' || type === 'input_text' || type === 'output_text') && text) {
+        const sanitized = cleanMessageText(text);
+        if (sanitized) parts.push({ type: 'text', text: sanitized });
+      } else if (includeTools && type === 'tool_use') {
+        parts.push({
+          type: 'tool_use',
+          name: block.name || 'unknown',
+          input: summarizeToolInput(block.input),
+        });
+      } else if (includeTools && type === 'tool_result') {
+        const resultText = extractToolResultText(block);
+        if (resultText) parts.push({ type: 'tool_result', text: resultText });
+      }
     }
+
+    return parts;
   }
 
-  return results;
+  if (typeof value === 'object') {
+    const type = String(value.type || '').toLowerCase();
+    const text = value.text || value.input_text || value.output_text || '';
+    if ((type === 'text' || type === 'input_text' || type === 'output_text') && text) {
+      const sanitized = cleanMessageText(text);
+      return sanitized ? [{ type: 'text', text: sanitized }] : [];
+    }
+    return [];
+  }
+  return [];
 }
 
 /**
@@ -554,6 +482,10 @@ function mergeParts(prevParts, nextParts) {
   const parts = prevParts.slice();
 
   for (const part of nextParts) {
+    if (part && part.type === 'text' && hasDuplicateTextPart(parts, part.text)) {
+      continue;
+    }
+
     const last = parts[parts.length - 1];
     if (last && last.type === 'text' && part.type === 'text') {
       last.text = `${last.text}\n\n${part.text}`;
@@ -563,6 +495,27 @@ function mergeParts(prevParts, nextParts) {
   }
 
   return parts;
+}
+
+/**
+ * Whether parts already include the same normalized text.
+ * @param {Array} parts
+ * @param {string} text
+ * @returns {boolean}
+ */
+function hasDuplicateTextPart(parts, text) {
+  const target = normalizeTextForCompare(text);
+  if (!target) return false;
+  return parts.some((part) => part && part.type === 'text' && normalizeTextForCompare(part.text) === target);
+}
+
+/**
+ * Normalize text for duplicate comparison.
+ * @param {string} text
+ * @returns {string}
+ */
+function normalizeTextForCompare(text) {
+  return String(text || '').trim().replace(/\s+/g, ' ');
 }
 
 /**
@@ -647,9 +600,70 @@ function debugSkip(entryType, payloadType, payloadRole, reason, entry) {
   if (process.env.CODEX_TO_SIYUAN_DEBUG !== '1') return;
   const payload = entry && entry.payload && typeof entry.payload === 'object' ? entry.payload : {};
   const item = entry && entry.item && typeof entry.item === 'object' ? entry.item : {};
+  const matches = findTextMatches(entry, '嘻嘻');
   process.stderr.write(
-    `[codex-to-siyuan] skipped transcript entry: entry.type=${entryType || ''}, payload.type=${payloadType || ''}, payload.role=${payloadRole || ''}, entry.keys=${listKeys(entry)}, payload.keys=${listKeys(payload)}, item.keys=${listKeys(item)}, reason=${reason}\n`
+    `[codex-to-siyuan] skipped transcript entry: entry.type=${entryType || ''}, payload.type=${payloadType || ''}, payload.role=${payloadRole || ''}, entry.keys=${listKeys(entry)}, payload.keys=${listKeys(payload)}, item.keys=${listKeys(item)}, matches=${matches.join('|')}, reason=${reason}\n`
   );
+}
+
+/**
+ * Log parsed messages in debug mode.
+ * @param {object|null} entry
+ * @param {string} role
+ * @param {string|null} turnId
+ * @param {Array} parts
+ * @param {string} source
+ */
+function debugParsedMessage(entry, role, turnId, parts, source) {
+  if (process.env.CODEX_TO_SIYUAN_DEBUG !== '1') return;
+  const payload = entry && entry.payload && typeof entry.payload === 'object' ? entry.payload : {};
+  const item = entry && entry.item && typeof entry.item === 'object' ? entry.item : {};
+  const text = parts
+    .filter((part) => part && part.type === 'text')
+    .map((part) => String(part.text || ''))
+    .join('\n')
+    .slice(0, 80);
+  process.stderr.write(
+    `[codex-to-siyuan] parsed transcript entry: entry.type=${entry?.type || ''}, payload.type=${payload.type || ''}, payload.role=${payload.role || ''}, item.type=${item.type || ''}, role=${role || ''}, turnId=${turnId || ''}, source=${source || ''}, text=${JSON.stringify(text)}\n`
+  );
+}
+
+/**
+ * Log skipped entries containing needle in debug mode.
+ * @param {object} entry
+ * @param {string} needle
+ */
+function debugEntryContaining(entry, needle) {
+  if (process.env.CODEX_TO_SIYUAN_DEBUG !== '1') return;
+  const matches = findTextMatches(entry, needle);
+  if (matches.length === 0) return;
+  const payload = entry && entry.payload && typeof entry.payload === 'object' ? entry.payload : {};
+  const item = entry && entry.item && typeof entry.item === 'object' ? entry.item : {};
+  process.stderr.write(
+    `[codex-to-siyuan] skipped entry contains ${needle}: entry.type=${entry?.type || ''}, payload.type=${payload.type || ''}, payload.role=${payload.role || ''}, item.type=${item.type || ''}, entry.keys=${listKeys(entry)}, payload.keys=${listKeys(payload)}, item.keys=${listKeys(item)}, matches=${matches.join('|')}\n`
+  );
+}
+
+/**
+ * Find string fields containing a needle for debug output.
+ * @param {*} value
+ * @param {string} needle
+ * @param {string} [path]
+ * @param {number} [depth]
+ * @returns {Array<string>}
+ */
+function findTextMatches(value, needle, path = 'entry', depth = 0) {
+  if (!value || depth > 5) return [];
+  if (typeof value === 'string') {
+    return value.includes(needle) ? [path] : [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) => findTextMatches(item, needle, `${path}[${index}]`, depth + 1));
+  }
+  if (typeof value === 'object') {
+    return Object.keys(value).flatMap((key) => findTextMatches(value[key], needle, `${path}.${key}`, depth + 1));
+  }
+  return [];
 }
 
 /**

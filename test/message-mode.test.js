@@ -186,6 +186,81 @@ test('classic mode skips assistant-only segment at document start', () => {
   assert.equal(filtered.some((msg) => msg.parts[0].text === 'assistant1'), false);
 });
 
+test('classic mode regression: first two turns with duplicate mirrored user entry stay ordered and deduped', () => {
+  const filePath = writeJsonl([
+    { type: 'turn_context', payload: { turn_id: 'turn-1' } },
+    {
+      timestamp: '2026-05-31T01:00:00.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'turn_input',
+        role: 'user',
+        input: '<environment_context><cwd>C:\\\\demo</cwd></environment_context>\n\n嘻嘻',
+      },
+    },
+    {
+      timestamp: '2026-05-31T01:00:00.100Z',
+      type: 'response_item',
+      payload: {
+        type: 'user_input_event',
+        role: 'user',
+        input: '嘻嘻',
+      },
+    },
+    {
+      timestamp: '2026-05-31T01:00:01.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: '嘻嘻。有何欲修此插件，直言即可。' }],
+      },
+    },
+    { type: 'turn_context', payload: { turn_id: 'turn-2' } },
+    {
+      timestamp: '2026-05-31T01:01:00.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: '嘻嘻 不嘻嘻' }],
+      },
+    },
+    {
+      timestamp: '2026-05-31T01:01:00.100Z',
+      type: 'response_item',
+      payload: {
+        type: 'turn_input',
+        role: 'user',
+        input: '嘻嘻 不嘻嘻',
+      },
+    },
+    {
+      timestamp: '2026-05-31T01:01:01.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: '然则不嘻嘻……' }],
+      },
+    },
+  ]);
+
+  const { messages } = parseTranscript(filePath, 0);
+  const normalized = normalizeMessages(messages);
+  const filtered = filterMessagesBySyncMode(normalized, 'classic', null);
+  const markdown = formatMessages(filtered, TEMPLATE);
+
+  assert.deepEqual(filtered.map((msg) => [msg.role, msg.parts[0].text]), [
+    ['user', '嘻嘻'],
+    ['assistant', '嘻嘻。有何欲修此插件，直言即可。'],
+    ['user', '嘻嘻 不嘻嘻'],
+    ['assistant', '然则不嘻嘻……'],
+  ]);
+  assert.equal((markdown.match(/嘻嘻 不嘻嘻/g) || []).length, 1);
+  assert.match(markdown, /嘻嘻[\s\S]*嘻嘻。有何欲修此插件，直言即可。[\s\S]*嘻嘻 不嘻嘻[\s\S]*然则不嘻嘻……/);
+});
+
 // ── Minimal mode ──────────────────────────────────────────────────
 
 test('minimal mode returns only final assistant output (with last_assistant_message)', () => {

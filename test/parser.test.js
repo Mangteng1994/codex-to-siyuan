@@ -200,6 +200,33 @@ test('metadata-like payload.input object is not misclassified as user text', () 
   assert.equal(messages.length, 0);
 });
 
+test('user-like event type is not misclassified as formal user message', () => {
+  const filePath = writeJsonl([
+    {
+      timestamp: '2026-05-29T01:00:00.000Z',
+      type: 'user_context_event',
+      payload: {
+        type: 'user_context_event',
+        input: '嘻嘻',
+      },
+    },
+  ]);
+
+  const { messages } = parseTranscript(filePath, 0);
+
+  assert.equal(messages.length, 0);
+});
+
+test('same turn duplicate user text is deduped during normalization', () => {
+  const normalized = normalizeMessages([
+    { role: 'user', turnId: 'turn-dup', parts: [{ type: 'text', text: '嘻嘻 不嘻嘻' }] },
+    { role: 'user', turnId: 'turn-dup', parts: [{ type: 'text', text: ' 嘻嘻   不嘻嘻 ' }] },
+  ]);
+
+  assert.equal(normalized.length, 1);
+  assert.equal(normalized[0].parts[0].text, '嘻嘻 不嘻嘻');
+});
+
 test('user message with only environment_context is ignored', () => {
   const filePath = writeJsonl([
     {
