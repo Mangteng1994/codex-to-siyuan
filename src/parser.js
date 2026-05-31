@@ -456,13 +456,16 @@ function normalizeMessages(messages) {
   const normalized = [];
   let index = 0;
 
-  // DEBUG: log input
-  try {
-    const fs = require('fs');
-    const path = require('path');
-    const logPath = path.join(__dirname, '..', '..', '..', 'temp', 'codex-norm-debug.log');
-    fs.appendFileSync(logPath, 'NORM IN: ' + JSON.stringify(messages.map(m => ({role:m.role,turnId:m.turnId,partsCount:m.parts?m.parts.length:0,valid:Boolean(m&&m.role&&Array.isArray(m.parts)&&m.parts.length>0)}))) + '\n', 'utf8');
-  } catch {}
+  function trace(msg) {
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const lp = path.join(__dirname, '..', '..', '..', '..', 'temp', 'codex-norm-trace.log');
+      fs.appendFileSync(lp, msg + '\n', 'utf8');
+    } catch {}
+  }
+  trace('=== NORM START: ' + messages.length + ' msgs ===');
+  trace('INPUT: ' + JSON.stringify(messages.map(m => ({r:m.role,t:!!m.turnId,p:Array.isArray(m.parts)?m.parts.length:0}))));
 
   while (index < messages.length) {
     const message = messages[index];
@@ -482,7 +485,10 @@ function normalizeMessages(messages) {
         index += 1;
       }
 
-      normalized.push(...mergeTurnMessages(turnMessages));
+      const turnMerged = mergeTurnMessages(turnMessages);
+      trace('TURN[' + turnId + ']: merge in=' + turnMessages.length + ' out=' + turnMerged.length + ' roles=' + JSON.stringify(turnMerged.map(m=>m.role)));
+      normalized.push(...turnMerged);
+      trace('NORMALIZED now: ' + JSON.stringify(normalized.map(m=>m.role)));
       continue;
     }
 
@@ -490,12 +496,7 @@ function normalizeMessages(messages) {
     index += 1;
   }
 
-  try {
-    const fs = require('fs');
-    const path = require('path');
-    const logPath = path.join(__dirname, '..', '..', '..', 'temp', 'codex-norm-debug.log');
-    fs.appendFileSync(logPath, 'NORM OUT: ' + JSON.stringify(normalized.map(m => ({role:m.role,turnId:m.turnId,partsCount:m.parts?m.parts.length:0}))) + '\n', 'utf8');
-  } catch {}
+  trace('=== NORM END: ' + JSON.stringify(normalized.map(m=>m.role)) + ' ===');
   return normalized;
 }
 
