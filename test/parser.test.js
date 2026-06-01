@@ -6,6 +6,7 @@ const path = require('node:path');
 
 const {
   cleanMessageText,
+  parseCodexEntry,
   parseTranscript,
   normalizeMessages,
 } = require('../src/parser');
@@ -579,7 +580,84 @@ test('cleanMessageText removes turn_aborted before environment_context', () => {
   assert.equal(cleaned, '测试');
 });
 
+test('cleanMessageText strips full INSTRUCTIONS block and dedupes duplicate first user line', () => {
+  const raw = `<INSTRUCTIONS>
+# AGENTS.md instructions for C:\\repo
+一些自动注入说明
+</INSTRUCTIONS>
+10
+10`;
 
+  assert.equal(cleanMessageText(raw), '10');
+});
+
+test('cleanMessageText strips residual AGENTS instructions prefix before closing tag', () => {
+  const raw = `xxx AGENTS.md instructions for C:\\repo
+还有一些说明
+</INSTRUCTIONS>
+10`;
+
+  assert.equal(cleanMessageText(raw), '10');
+});
+
+test('cleanMessageText keeps normal user text mentioning AGENTS.md file', () => {
+  assert.equal(cleanMessageText('请阅读 AGENTS.md 文件'), '请阅读 AGENTS.md 文件');
+});
+
+test('parseCodexEntry ignores reasoning and message_delta payloads', () => {
+  const reasoning = parseCodexEntry({
+    type: 'response_item',
+    payload: {
+      type: 'reasoning',
+      role: 'assistant',
+      text: '这段推理不该进入正文',
+    },
+  }, 'turn-reasoning');
+  const delta = parseCodexEntry({
+    type: 'response_item',
+    payload: {
+      type: 'message_delta',
+      role: 'assistant',
+      text: '这段增量也不该进入正文',
+    },
+  }, 'turn-reasoning');
+
+  assert.equal(reasoning, null);
+  assert.equal(delta, null);
+});
+
+test('formatted assistant body excludes reasoning and message_delta transcript items', () => {
+  const filePath = writeJsonl([
+    { type: 'turn_context', payload: { turn_id: 'turn-final-only' } },
+    {
+      timestamp: '2026-06-01T01:00:00.000Z',
+      type: 'response_item',
+      payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '10' }] },
+    },
+    {
+      timestamp: '2026-06-01T01:00:01.000Z',
+      type: 'response_item',
+      payload: { type: 'reasoning', role: 'assistant', text: '隐藏推理' },
+    },
+    {
+      timestamp: '2026-06-01T01:00:02.000Z',
+      type: 'response_item',
+      payload: { type: 'message_delta', role: 'assistant', text: '增量输出' },
+    },
+    {
+      timestamp: '2026-06-01T01:00:03.000Z',
+      type: 'response_item',
+      payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '最终回复' }] },
+    },
+  ]);
+
+  const { messages } = parseTranscript(filePath, 0);
+  const markdown = formatMessages(normalizeMessages(messages), TEMPLATE);
+
+  assert.match(markdown, /最终回复/);
+  assert.equal(markdown.includes('隐藏推理'), false);
+  assert.equal(markdown.includes('增量输出'), false);
+});
 
 test('balanceMarkdownFences adds closing fence when odd count', () => {
   const text = '```javascript\nconst x = 1;\n';

@@ -314,6 +314,50 @@ test('classic mode parses first turn user from non-response_item structure', () 
   ]);
 });
 
+test('classic mode keeps first user after stripping injected INSTRUCTIONS and dedupes duplicated 10', () => {
+  const filePath = writeJsonl([
+    { type: 'turn_context', payload: { turn_id: 'turn-injected-1' } },
+    {
+      timestamp: '2026-06-01T02:00:00.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'turn_input',
+        role: 'user',
+        input: `<INSTRUCTIONS>
+# AGENTS.md instructions for C:\\SiYuanData\\data\\plugins\\codex-to-siyuan
+自动注入说明
+</INSTRUCTIONS>
+10
+10`,
+      },
+    },
+    {
+      timestamp: '2026-06-01T02:00:01.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: '最终回复' }],
+      },
+    },
+  ]);
+
+  const { messages } = parseTranscript(filePath, 0);
+  const normalized = normalizeMessages(messages);
+  const filtered = filterMessagesBySyncMode(normalized, 'classic', null);
+  const markdown = formatMessages(filtered, TEMPLATE);
+
+  assert.deepEqual(filtered.map((msg) => [msg.role, msg.parts[0].text]), [
+    ['user', '10'],
+    ['assistant', '最终回复'],
+  ]);
+  assert.equal(markdown.includes('\n10\n\n10'), false);
+  assert.equal(markdown.includes('\n10\n10'), false);
+  assert.equal(markdown.includes('AGENTS.md instructions'), false);
+  assert.equal(markdown.includes('<INSTRUCTIONS>'), false);
+  assert.equal(markdown.includes('</INSTRUCTIONS>'), false);
+});
+
 // ── Minimal mode ──────────────────────────────────────────────────
 
 test('minimal mode returns only final assistant output (with last_assistant_message)', () => {

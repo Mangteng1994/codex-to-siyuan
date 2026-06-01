@@ -14,14 +14,66 @@ const TOOL_LIKE_TYPES = new Set([
 ]);
 
 /**
- * 清理消息文本中的环境上下文块。
+ * 剥离 Codex 自动注入的 AGENTS/INSTRUCTIONS 文本。
+ * 不删除普通用户正文里提到的 “AGENTS.md 文件”。
+ * @param {string} text
+ * @returns {string}
+ */
+function stripCodexInjectedInstructions(text) {
+  let cleaned = String(text || '');
+
+  cleaned = cleaned.replace(/<INSTRUCTIONS>[\s\S]*?<\/INSTRUCTIONS>\s*/g, '');
+
+  const endTag = '</INSTRUCTIONS>';
+  let endIndex = cleaned.indexOf(endTag);
+  while (endIndex !== -1) {
+    const prefix = cleaned.slice(0, endIndex);
+    const looksLikeInjected = prefix.includes('<INSTRUCTIONS>')
+      || prefix.includes('# AGENTS.md instructions for')
+      || prefix.includes('AGENTS.md instructions for');
+
+    if (!looksLikeInjected) {
+      break;
+    }
+
+    cleaned = cleaned.slice(endIndex + endTag.length).replace(/^\s+/, '');
+    endIndex = cleaned.indexOf(endTag);
+  }
+
+  return cleaned;
+}
+
+/**
+ * 对连续重复行去重，避免首轮用户输入被写成两行相同内容。
+ * @param {string} text
+ * @returns {string}
+ */
+function dedupeConsecutiveDuplicateLines(text) {
+  const lines = String(text || '').split(/\r?\n/);
+  const deduped = [];
+
+  for (const line of lines) {
+    const prev = deduped[deduped.length - 1];
+    if (prev !== undefined && prev === line && line.trim()) {
+      continue;
+    }
+    deduped.push(line);
+  }
+
+  return deduped.join('\n');
+}
+
+/**
+ * 清理消息文本中的环境上下文块与注入指令。
  * @param {string} text
  * @returns {string}
  */
 function cleanMessageText(text) {
-  return String(text || '')
-    .replace(/<environment_context>[\s\S]*?<\/environment_context>\s*/g, '').replace(/<turn_aborted>[\s\S]*?<\/turn_aborted>\s*/g, '')
-    .trim();
+  const withoutEnvironment = String(text || '')
+    .replace(/<environment_context>[\s\S]*?<\/environment_context>\s*/g, '')
+    .replace(/<turn_aborted>[\s\S]*?<\/turn_aborted>\s*/g, '');
+  const withoutInjectedInstructions = stripCodexInjectedInstructions(withoutEnvironment);
+  return dedupeConsecutiveDuplicateLines(withoutInjectedInstructions).trim();
 }
 
 /**
@@ -217,6 +269,10 @@ function parseCodexEntry(entry, turnId = null) {
         source: extracted.source,
       };
     }
+  }
+
+  if (payload.type === 'reasoning' || payload.type === 'message_delta') {
+    return null;
   }
 
   const toolUse = parseCodexToolUse(payload);
@@ -425,11 +481,6 @@ function parseCodexToolResult(payload) {
  * @returns {string}
  */
 function extractCodexReadableText(payload) {
-  if (payload.type === 'reasoning' || payload.type === 'message_delta') {
-    const text = extractAnyText(payload.text || payload.content || payload.summary, 500);
-    return cleanMessageText(text);
-  }
-
   return '';
 }
 
@@ -889,6 +940,8 @@ function truncate(str, max) {
 
 module.exports = {
   cleanMessageText,
+  stripCodexInjectedInstructions,
+  dedupeConsecutiveDuplicateLines,
   parseTranscript,
   parseEntry,
   parseMessage,
