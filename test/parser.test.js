@@ -604,6 +604,24 @@ test('cleanMessageText keeps normal user text mentioning AGENTS.md file', () => 
   assert.equal(cleanMessageText('请阅读 AGENTS.md 文件'), '请阅读 AGENTS.md 文件');
 });
 
+test('cleanMessageText strips bare AGENTS instruction header and collapses repeated 10', () => {
+  const raw = '# AGENTS.md instructions for C:\\repo\n\n10\n\n10';
+
+  assert.equal(cleanMessageText(raw), '10');
+});
+
+test('cleanMessageText strips multiple leading bare AGENTS headers', () => {
+  const raw = '# AGENTS.md instructions for C:\\global\n# AGENTS.md instructions for C:\\repo\n\n10\n\n10';
+
+  assert.equal(cleanMessageText(raw), '10');
+});
+
+test('cleanMessageText keeps mixed text when lines are not all identical', () => {
+  const raw = '10\n\n请解释';
+
+  assert.equal(cleanMessageText(raw), '10\n\n请解释');
+});
+
 test('parseCodexEntry ignores reasoning and message_delta payloads', () => {
   const reasoning = parseCodexEntry({
     type: 'response_item',
@@ -624,6 +642,25 @@ test('parseCodexEntry ignores reasoning and message_delta payloads', () => {
 
   assert.equal(reasoning, null);
   assert.equal(delta, null);
+});
+
+test('normalizeMessages avoids duplicate 10 across merged text parts after AGENTS cleanup', () => {
+  const normalized = normalizeMessages([
+    {
+      role: 'user',
+      turnId: 't1',
+      parts: [{ type: 'text', text: cleanMessageText('# AGENTS.md instructions for C:\\repo\n\n10') }],
+    },
+    {
+      role: 'user',
+      turnId: 't1',
+      parts: [{ type: 'text', text: cleanMessageText('10') }],
+    },
+  ]);
+
+  assert.equal(normalized.length, 1);
+  assert.equal(normalized[0].parts.length, 1);
+  assert.equal(normalized[0].parts[0].text, '10');
 });
 
 test('formatted assistant body excludes reasoning and message_delta transcript items', () => {

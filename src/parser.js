@@ -19,6 +19,26 @@ const TOOL_LIKE_TYPES = new Set([
  * @param {string} text
  * @returns {string}
  */
+function stripLeadingAgentsInstructionHeader(text) {
+  let cleaned = String(text || '');
+  let matched = true;
+
+  while (matched) {
+    matched = false;
+    cleaned = cleaned.replace(/^\s*# AGENTS\.md instructions for [^\r\n]*(?:\r?\n)+/i, () => {
+      matched = true;
+      return '';
+    });
+  }
+
+  return cleaned;
+}
+
+/**
+ * 剥离 Codex 自动注入的 AGENTS/INSTRUCTIONS 文本。
+ * @param {string} text
+ * @returns {string}
+ */
 function stripCodexInjectedInstructions(text) {
   let cleaned = String(text || '');
 
@@ -40,6 +60,7 @@ function stripCodexInjectedInstructions(text) {
     endIndex = cleaned.indexOf(endTag);
   }
 
+  cleaned = stripLeadingAgentsInstructionHeader(cleaned);
   return cleaned;
 }
 
@@ -64,6 +85,30 @@ function dedupeConsecutiveDuplicateLines(text) {
 }
 
 /**
+ * 如果所有非空行完全相同，则折叠成单行。
+ * @param {string} text
+ * @returns {string}
+ */
+function collapseRepeatedOnlyText(text) {
+  const raw = String(text || '');
+  const lines = raw.split(/\r?\n/);
+  const nonEmptyLines = lines
+    .map(line => line.trim())
+    .filter(Boolean);
+
+  if (nonEmptyLines.length <= 1) {
+    return raw;
+  }
+
+  const first = nonEmptyLines[0];
+  if (nonEmptyLines.every(line => line === first)) {
+    return first;
+  }
+
+  return raw;
+}
+
+/**
  * 清理消息文本中的环境上下文块与注入指令。
  * @param {string} text
  * @returns {string}
@@ -73,7 +118,8 @@ function cleanMessageText(text) {
     .replace(/<environment_context>[\s\S]*?<\/environment_context>\s*/g, '')
     .replace(/<turn_aborted>[\s\S]*?<\/turn_aborted>\s*/g, '');
   const withoutInjectedInstructions = stripCodexInjectedInstructions(withoutEnvironment);
-  return dedupeConsecutiveDuplicateLines(withoutInjectedInstructions).trim();
+  const deduped = dedupeConsecutiveDuplicateLines(withoutInjectedInstructions);
+  return collapseRepeatedOnlyText(deduped).trim();
 }
 
 /**
@@ -671,7 +717,16 @@ function mergeParts(prevParts, nextParts) {
 function hasDuplicateTextPart(parts, text) {
   const target = normalizeTextForCompare(text);
   if (!target) return false;
-  return parts.some((part) => part && part.type === 'text' && normalizeTextForCompare(part.text) === target);
+  return parts.some((part) => {
+    if (!part || part.type !== 'text') return false;
+
+    if (normalizeTextForCompare(part.text) === target) {
+      return true;
+    }
+
+    const chunks = splitTextIntoCompareChunks(part.text);
+    return chunks.includes(target);
+  });
 }
 
 /**
@@ -681,6 +736,18 @@ function hasDuplicateTextPart(parts, text) {
  */
 function normalizeTextForCompare(text) {
   return String(text || '').trim().replace(/\s+/g, ' ');
+}
+
+/**
+ * 将文本按空行或换行拆为可比较片段。
+ * @param {string} text
+ * @returns {Array<string>}
+ */
+function splitTextIntoCompareChunks(text) {
+  return String(text || '')
+    .split(/\r?\n\s*\r?\n|\r?\n/g)
+    .map(chunk => normalizeTextForCompare(chunk))
+    .filter(Boolean);
 }
 
 /**
@@ -940,8 +1007,10 @@ function truncate(str, max) {
 
 module.exports = {
   cleanMessageText,
+  stripLeadingAgentsInstructionHeader,
   stripCodexInjectedInstructions,
   dedupeConsecutiveDuplicateLines,
+  collapseRepeatedOnlyText,
   parseTranscript,
   parseEntry,
   parseMessage,
