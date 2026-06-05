@@ -116,7 +116,8 @@ function collapseRepeatedOnlyText(text) {
 function cleanMessageText(text) {
   const withoutEnvironment = String(text || '')
     .replace(/<environment_context>[\s\S]*?<\/environment_context>\s*/g, '')
-    .replace(/<turn_aborted>[\s\S]*?<\/turn_aborted>\s*/g, '');
+    .replace(/<turn_aborted>[\s\S]*?<\/turn_aborted>\s*/g, '')
+    .replace(/<subagent_notification>[\s\S]*?<\/subagent_notification>\s*/g, '');
   const withoutInjectedInstructions = stripCodexInjectedInstructions(withoutEnvironment);
   const deduped = dedupeConsecutiveDuplicateLines(withoutInjectedInstructions);
   return collapseRepeatedOnlyText(deduped).trim();

@@ -580,15 +580,48 @@ test('cleanMessageText removes turn_aborted before environment_context', () => {
   assert.equal(cleaned, '测试');
 });
 
-test('cleanMessageText strips full INSTRUCTIONS block and dedupes duplicate first user line', () => {
-  const raw = `<INSTRUCTIONS>
-# AGENTS.md instructions for C:\\repo
-一些自动注入说明
-</INSTRUCTIONS>
-10
-10`;
+test('cleanMessageText strips full AGENTS instructions block and keeps real user text', () => {
+  const raw = `# AGENTS.md instructions for C:\\SiYuanData\\data\\plugins\\siyuan-plugin-gitee-pages
 
-  assert.equal(cleanMessageText(raw), '10');
+<INSTRUCTIONS>
+## 全局代理规则
+
+- 始终使用中文回复。
+
+--- project-doc ---
+
+# AGENTS.md — siyuan-plugin-gitee-pages
+
+Repo = SiYuan desktop plugin.
+</INSTRUCTIONS>
+两个Agents.md`;
+
+  const cleaned = cleanMessageText(raw);
+  assert.equal(cleaned, '两个Agents.md');
+});
+
+test('cleanMessageText removes subagent_notification blocks', () => {
+  const raw = `<subagent_notification>
+worker done
+</subagent_notification>
+
+继续`;
+
+  const cleaned = cleanMessageText(raw);
+  assert.equal(cleaned.includes('subagent_notification'), false);
+  assert.equal(cleaned, '继续');
+});
+
+test('cleanMessageText removes subagent_notification together with environment_context', () => {
+  const raw = `<subagent_notification>done</subagent_notification>
+<environment_context><cwd>C:\\demo</cwd></environment_context>
+
+正文`;
+
+  const cleaned = cleanMessageText(raw);
+  assert.equal(cleaned.includes('subagent_notification'), false);
+  assert.equal(cleaned.includes('environment_context'), false);
+  assert.equal(cleaned, '正文');
 });
 
 test('cleanMessageText strips residual AGENTS instructions prefix before closing tag', () => {
