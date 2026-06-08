@@ -1,9 +1,10 @@
 {
   "name": "codex-to-siyuan",
-  "version": "0.9.6",
+  "version": "0.9.7",
   "description": "SiYuan plugin: automatically save Codex conversations to SiYuan notes",
   "main": "index.js",
   "scripts": {
+    "build": "node scripts/build-package.js",
     "test": "node --test test/*.test.js"
   },
   "keywords": ["codex", "siyuan", "siyuan-plugin", "hook", "notes", "思源笔记"],

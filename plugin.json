@@ -2,7 +2,7 @@
   "name": "codex-to-siyuan",
   "author": "Mangteng1994",
   "url": "https://github.com/Mangteng1994/codex-to-siyuan",
-  "version": "0.9.6",
+  "version": "0.9.7",
   "minAppVersion": "3.2.0",
   "backends": ["windows", "linux", "darwin"],
   "frontends": ["desktop", "desktop-window"],
