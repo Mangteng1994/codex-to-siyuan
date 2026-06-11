@@ -1,6 +1,6 @@
 {
   "name": "codex-to-siyuan",
-  "version": "0.9.7",
+  "version": "0.9.8",
   "description": "SiYuan plugin: automatically save Codex conversations to SiYuan notes",
   "main": "index.js",
   "scripts": {
